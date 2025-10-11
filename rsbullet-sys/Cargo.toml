@@ -8,6 +8,7 @@ authors = [
     "Yixing <yanjizhou312@163.com>"
 ]
 homepage = "https://github.com/Robot-Exp-Platform/rsbullet"
+readme = "../README.md"
 license = "MIT"
 description = "Compiles bullet3 and exposes rust bindings to the C API"
 categories = ["science::robotics", "simulation"]
