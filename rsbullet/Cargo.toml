@@ -21,7 +21,8 @@ exclude = [
 ]
 
 [dependencies]
-rsbullet-core = { path = "../rsbullet-core" }
+rsbullet-core = { version = "0.1.0", path = "../rsbullet-core" }
+rsbullet_sys = {version = "0.1.0", path = "../rsbullet-sys" }
 nalgebra = { version = "0.34.1" }
 
 [features]
