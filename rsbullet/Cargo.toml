@@ -7,6 +7,7 @@ authors = [
     "Marco Boneberger <m.boneberger@tu-bs.de>",
     "Yixing <yanjizhou312@163.com>"
 ]
+homepage = "https://github.com/Robot-Exp-Platform/rsbullet"
 license = "MIT"
 description = "Compiles bullet3 and exposes rust bindings to the C API"
 categories = ["science::robotics", "simulation"]
