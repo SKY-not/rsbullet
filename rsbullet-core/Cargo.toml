@@ -1,0 +1,17 @@
+[package]
+name = "rsbullet-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rsbullet_sys = { path = "../rsbullet-sys" }
+nalgebra = { version = "0.34.1" }
+
+[features]
+default = ["dart","physx","mujoco","grpc","enet"]
+dart = []
+physx = []
+mujoco = []
+grpc = []
+enet = []
+clsocket = []

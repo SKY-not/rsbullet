@@ -1,12 +1,3 @@
-[submodule "rsbullet/bullet3"]
-	path = rsbullet/bullet3
-	url = git@github.com:bulletphysics/bullet3.git
-[submodule "rsbullet/bullet3-sys"]
-	path = rsbullet/bullet3-sys
-	url = git@github.com:bulletphysics/bullet3.git
-[submodule "rsbullet/rsbullet-sys/bullet3"]
-	path = rsbullet/rsbullet-sys/bullet3
-	url = git@github.com:bulletphysics/bullet3.git
 [submodule "rsbullet-sys/bullet3"]
 	path = rsbullet-sys/bullet3
 	url = git@github.com:bulletphysics/bullet3.git

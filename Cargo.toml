@@ -1,0 +1,4 @@
+[workspace]
+members = ["rsbullet","rsbullet-core","rsbullet-sys"]
+
+resolver = "3"
