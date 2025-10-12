@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 fn lib_exists(dir: &Path, name: &str) -> bool {
     // Windows static: Foo.lib；Unix static: libFoo.a
@@ -76,4 +79,94 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=Opengl32");
         println!("cargo:rustc-link-lib=dylib=Comdlg32");
     }
+
+    if let Err(err) = export_bullet_data() {
+        println!("cargo:warning=failed to prepare bullet data directory: {err}");
+    }
+}
+
+fn export_bullet_data() -> Result<(), String> {
+    let manifest_dir =
+        env::var("CARGO_MANIFEST_DIR").map_err(|e| format!("missing CARGO_MANIFEST_DIR: {e}"))?;
+    let source_1 = Path::new(&manifest_dir)
+        .join("bullet3")
+        .join("examples")
+        .join("pybullet")
+        .join("gym")
+        .join("pybullet_data");
+    if !source_1.exists() {
+        return Err(format!(
+            "source data directory not found: {}",
+            source_1.display()
+        ));
+    }
+    let source_2 = Path::new(&manifest_dir).join("bullet3").join("data");
+    if !source_2.exists() {
+        return Err(format!(
+            "source data directory not found: {}",
+            source_2.display()
+        ));
+    }
+
+    let target_root =
+        bullet_data_target_dir().ok_or_else(|| "could not determine user directory".to_string())?;
+    let target = target_root.join("bullet");
+
+    if target.exists() {
+        fs::remove_dir_all(&target)
+            .map_err(|e| format!("failed to clear existing target {}: {e}", target.display()))?;
+    }
+    copy_dir_recursive(&source_1, &target)?;
+    copy_dir_recursive(&source_2, &target)?;
+
+    Ok(())
+}
+
+fn bullet_data_target_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("USERPROFILE").map(PathBuf::from))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("Library").join("Application Support"))
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".local").join("share"))
+    }
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination)
+        .map_err(|e| format!("failed to create {}: {e}", destination.display()))?;
+
+    for entry in
+        fs::read_dir(source).map_err(|e| format!("failed to read {}: {e}", source.display()))?
+    {
+        let entry = entry.map_err(|e| format!("failed to iterate directory: {e}"))?;
+        let path = entry.path();
+        let dest_path = destination.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            fs::copy(&path, &dest_path).map_err(|e| {
+                format!(
+                    "failed to copy {} to {}: {e}",
+                    path.display(),
+                    dest_path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
 }

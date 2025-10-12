@@ -1,10 +1,12 @@
 use std::{
     borrow::Cow,
     convert::{TryFrom, TryInto},
+    env,
     ffi::{CStr, CString},
     mem::MaybeUninit,
     os::raw::c_char,
     path::Path,
+    path::PathBuf,
     ptr, slice,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -1415,6 +1417,34 @@ impl PhysicsClient {
             ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_STATE_COMPLETED,
         )?;
         Ok(())
+    }
+
+    pub fn bullet_data_path() -> PathBuf {
+        {
+            #[cfg(target_os = "windows")]
+            {
+                env::var_os("LOCALAPPDATA")
+                    .or_else(|| env::var_os("USERPROFILE"))
+                    .map(PathBuf::from)
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                use std::path::PathBuf;
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join("Library").join("Application Support"))
+            }
+
+            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+            {
+                use std::path::PathBuf;
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".local").join("share"))
+            }
+        }.map(|path| path.join("bullet"))
+        .unwrap()
     }
 
     pub fn set_additional_search_path(&mut self, path: impl AsRef<Path>) -> BulletResult<()> {
