@@ -1443,7 +1443,8 @@ impl PhysicsClient {
                     .map(PathBuf::from)
                     .map(|home| home.join(".local").join("share"))
             }
-        }.map(|path| path.join("bullet"))
+        }
+        .map(|path| path.join("bullet"))
         .unwrap()
     }
 
@@ -3578,6 +3579,173 @@ impl PhysicsClient {
             .collect()
     }
 
+    fn decode_camera_image(raw: &ffi::b3CameraImageData) -> BulletResult<CameraImage> {
+        let width = raw.m_pixel_width;
+        let height = raw.m_pixel_height;
+        if width <= 0 || height <= 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Camera returned an empty image",
+                code: -1,
+            });
+        }
+
+        let pixel_count = (width as usize) * (height as usize);
+        let mut rgba = Vec::with_capacity(pixel_count * 4);
+        if !raw.m_rgb_color_data.is_null() && pixel_count > 0 {
+            let data = unsafe { slice::from_raw_parts(raw.m_rgb_color_data, pixel_count * 4) };
+            rgba.extend_from_slice(data);
+        } else {
+            rgba.resize(pixel_count * 4, 0);
+        }
+
+        let mut depth = Vec::with_capacity(pixel_count);
+        if !raw.m_depth_values.is_null() && pixel_count > 0 {
+            let data = unsafe { slice::from_raw_parts(raw.m_depth_values, pixel_count) };
+            depth.extend_from_slice(data);
+        } else {
+            depth.resize(pixel_count, 0.0);
+        }
+
+        let mut segmentation_mask = Vec::with_capacity(pixel_count);
+        if !raw.m_segmentation_mask_values.is_null() && pixel_count > 0 {
+            let data =
+                unsafe { slice::from_raw_parts(raw.m_segmentation_mask_values, pixel_count) };
+            segmentation_mask.extend(data.iter().copied());
+        } else {
+            segmentation_mask.resize(pixel_count, -1);
+        }
+
+        Ok(CameraImage {
+            width,
+            height,
+            rgba,
+            depth,
+            segmentation_mask,
+        })
+    }
+
+    fn collect_vr_events(
+        data: &ffi::b3VREventsData,
+        include_aux_analog_axes: bool,
+    ) -> Vec<VrControllerEvent> {
+        if data.m_controllerEvents.is_null() || data.m_numControllerEvents <= 0 {
+            return Vec::new();
+        }
+        let count = data.m_numControllerEvents as usize;
+        let raw = unsafe { slice::from_raw_parts(data.m_controllerEvents, count) };
+        raw.iter()
+            .map(|event| {
+                let mut position = [0.0_f32; 3];
+                position.copy_from_slice(&event.m_pos[..3]);
+                let orientation = event.m_orn;
+                let mut aux = [0.0_f32; VR_MAX_ANALOG_AXIS * 2];
+                if include_aux_analog_axes {
+                    aux.copy_from_slice(&event.m_auxAnalogAxis);
+                }
+                let mut buttons = [0_i32; VR_MAX_BUTTONS];
+                buttons.copy_from_slice(&event.m_buttons);
+                VrControllerEvent {
+                    controller_id: event.m_controllerId,
+                    device_type: event.m_deviceType,
+                    num_move_events: event.m_numMoveEvents,
+                    num_button_events: event.m_numButtonEvents,
+                    position,
+                    orientation,
+                    analog_axis: event.m_analogAxis,
+                    aux_analog_axis: aux,
+                    buttons,
+                }
+            })
+            .collect()
+    }
+
+    fn collect_keyboard_events(data: &ffi::b3KeyboardEventsData) -> Vec<KeyboardEvent> {
+        if data.m_keyboardEvents.is_null() || data.m_numKeyboardEvents <= 0 {
+            return Vec::new();
+        }
+        let count = data.m_numKeyboardEvents as usize;
+        let raw = unsafe { slice::from_raw_parts(data.m_keyboardEvents, count) };
+        raw.iter()
+            .map(|event| KeyboardEvent {
+                key_code: event.m_keyCode,
+                key_state: event.m_keyState,
+            })
+            .collect()
+    }
+
+    fn collect_mouse_events(data: &ffi::b3MouseEventsData) -> Vec<MouseEvent> {
+        if data.m_mouseEvents.is_null() || data.m_numMouseEvents <= 0 {
+            return Vec::new();
+        }
+        let count = data.m_numMouseEvents as usize;
+        let raw = unsafe { slice::from_raw_parts(data.m_mouseEvents, count) };
+        raw.iter()
+            .map(|event| MouseEvent {
+                event_type: event.m_eventType,
+                mouse_pos_x: event.m_mousePosX,
+                mouse_pos_y: event.m_mousePosY,
+                button_index: event.m_buttonIndex,
+                button_state: event.m_buttonState,
+            })
+            .collect()
+    }
+
+    fn collect_visual_shapes(info: &ffi::b3VisualShapeInformation) -> Vec<VisualShapeData> {
+        if info.m_visualShapeData.is_null() || info.m_numVisualShapes <= 0 {
+            return Vec::new();
+        }
+        let count = info.m_numVisualShapes as usize;
+        let raw = unsafe { slice::from_raw_parts(info.m_visualShapeData, count) };
+        raw.iter()
+            .map(|shape| {
+                let mut frame_position = [0.0_f64; 3];
+                frame_position.copy_from_slice(&shape.m_localVisualFrame[..3]);
+                let mut frame_orientation = [0.0_f64; 4];
+                frame_orientation.copy_from_slice(&shape.m_localVisualFrame[3..7]);
+                VisualShapeData {
+                    object_unique_id: shape.m_objectUniqueId,
+                    link_index: shape.m_linkIndex,
+                    geometry_type: shape.m_visualGeometryType,
+                    dimensions: shape.m_dimensions,
+                    mesh_asset_file_name: Self::read_c_string(&shape.m_meshAssetFileName),
+                    local_visual_frame_position: frame_position,
+                    local_visual_frame_orientation: frame_orientation,
+                    rgba_color: shape.m_rgbaColor,
+                    tiny_renderer_texture_id: shape.m_tinyRendererTextureId,
+                    texture_unique_id: shape.m_textureUniqueId,
+                    opengl_texture_id: shape.m_openglTextureId,
+                }
+            })
+            .collect()
+    }
+
+    fn collect_collision_shapes(
+        info: &ffi::b3CollisionShapeInformation,
+    ) -> Vec<CollisionShapeData> {
+        if info.m_collisionShapeData.is_null() || info.m_numCollisionShapes <= 0 {
+            return Vec::new();
+        }
+        let count = info.m_numCollisionShapes as usize;
+        let raw = unsafe { slice::from_raw_parts(info.m_collisionShapeData, count) };
+        raw.iter()
+            .map(|shape| {
+                let mut frame_position = [0.0_f64; 3];
+                frame_position.copy_from_slice(&shape.m_localCollisionFrame[..3]);
+                let mut frame_orientation = [0.0_f64; 4];
+                frame_orientation.copy_from_slice(&shape.m_localCollisionFrame[3..7]);
+                CollisionShapeData {
+                    object_unique_id: shape.m_objectUniqueId,
+                    link_index: shape.m_linkIndex,
+                    geometry_type: shape.m_collisionGeometryType,
+                    dimensions: shape.m_dimensions,
+                    mesh_asset_file_name: Self::read_c_string(&shape.m_meshAssetFileName),
+                    local_collision_frame_position: frame_position,
+                    local_collision_frame_orientation: frame_orientation,
+                }
+            })
+            .collect()
+    }
+
     fn usize_to_i32(value: usize) -> BulletResult<i32> {
         value.try_into().map_err(|_| BulletError::CommandFailed {
             message: "Index exceeds Bullet i32 range",
@@ -3621,7 +3789,500 @@ impl PhysicsClient {
 /// | getVisualShapeData | Pending | Visual query |
 /// | getCollisionShapeData | Pending | Collision query |
 impl PhysicsClient {
-    fn _rendering_debug_visualization() {}
+    pub fn get_camera_image(&mut self, request: &CameraImageRequest) -> BulletResult<CameraImage> {
+        if request.width <= 0 || request.height <= 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Camera image width/height must be positive",
+                code: -1,
+            });
+        }
+
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRequestCameraImage(self.handle) };
+        unsafe {
+            ffi::b3RequestCameraImageSetPixelResolution(command, request.width, request.height);
+        }
+
+        if let (Some(mut view), Some(mut projection)) =
+            (request.view_matrix, request.projection_matrix)
+        {
+            unsafe {
+                ffi::b3RequestCameraImageSetCameraMatrices(
+                    command,
+                    view.as_mut_ptr(),
+                    projection.as_mut_ptr(),
+                );
+            }
+        }
+        if let Some(mut direction) = request.light_direction {
+            unsafe { ffi::b3RequestCameraImageSetLightDirection(command, direction.as_mut_ptr()) };
+        }
+        if let Some(mut color) = request.light_color {
+            unsafe { ffi::b3RequestCameraImageSetLightColor(command, color.as_mut_ptr()) };
+        }
+        if let Some(distance) = request.light_distance
+            && distance >= 0.0
+        {
+            unsafe { ffi::b3RequestCameraImageSetLightDistance(command, distance) };
+        }
+        if let Some(has_shadow) = request.shadow {
+            unsafe { ffi::b3RequestCameraImageSetShadow(command, has_shadow as i32) };
+        }
+        if let Some(coeff) = request.light_ambient_coeff
+            && coeff >= 0.0
+        {
+            unsafe { ffi::b3RequestCameraImageSetLightAmbientCoeff(command, coeff) };
+        }
+        if let Some(coeff) = request.light_diffuse_coeff
+            && coeff >= 0.0
+        {
+            unsafe { ffi::b3RequestCameraImageSetLightDiffuseCoeff(command, coeff) };
+        }
+        if let Some(coeff) = request.light_specular_coeff
+            && coeff >= 0.0
+        {
+            unsafe { ffi::b3RequestCameraImageSetLightSpecularCoeff(command, coeff) };
+        }
+        if let Some(renderer) = request.renderer {
+            unsafe { ffi::b3RequestCameraImageSelectRenderer(command, renderer) };
+        }
+        if let Some(flags) = request.flags {
+            unsafe { ffi::b3RequestCameraImageSetFlags(command, flags) };
+        }
+        if let (Some(mut view), Some(mut projection)) = (
+            request.projective_texture_view,
+            request.projective_texture_projection,
+        ) {
+            unsafe {
+                ffi::b3RequestCameraImageSetProjectiveTextureMatrices(
+                    command,
+                    view.as_mut_ptr(),
+                    projection.as_mut_ptr(),
+                );
+            }
+        }
+
+        let _status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CAMERA_IMAGE_COMPLETED,
+        )?;
+
+        let mut raw = ffi::b3CameraImageData::default();
+        unsafe { ffi::b3GetCameraImageData(self.handle, &mut raw) };
+        Self::decode_camera_image(&raw)
+    }
+
+    pub fn compute_view_matrix(
+        camera_eye_position: [f32; 3],
+        camera_target_position: [f32; 3],
+        camera_up_vector: [f32; 3],
+    ) -> [f32; 16] {
+        let mut matrix = [0.0_f32; 16];
+        unsafe {
+            ffi::b3ComputeViewMatrixFromPositions(
+                camera_eye_position.as_ptr(),
+                camera_target_position.as_ptr(),
+                camera_up_vector.as_ptr(),
+                matrix.as_mut_ptr(),
+            );
+        }
+        matrix
+    }
+
+    pub fn compute_view_matrix_from_yaw_pitch_roll(
+        camera_target_position: [f32; 3],
+        distance: f32,
+        yaw: f32,
+        pitch: f32,
+        roll: f32,
+        up_axis: i32,
+    ) -> [f32; 16] {
+        let mut matrix = [0.0_f32; 16];
+        unsafe {
+            ffi::b3ComputeViewMatrixFromYawPitchRoll(
+                camera_target_position.as_ptr(),
+                distance,
+                yaw,
+                pitch,
+                roll,
+                up_axis,
+                matrix.as_mut_ptr(),
+            );
+        }
+        matrix
+    }
+
+    pub fn compute_projection_matrix(
+        left: f32,
+        right: f32,
+        bottom: f32,
+        top: f32,
+        near_val: f32,
+        far_val: f32,
+    ) -> [f32; 16] {
+        let mut matrix = [0.0_f32; 16];
+        unsafe {
+            ffi::b3ComputeProjectionMatrix(
+                left,
+                right,
+                bottom,
+                top,
+                near_val,
+                far_val,
+                matrix.as_mut_ptr(),
+            );
+        }
+        matrix
+    }
+
+    pub fn compute_projection_matrix_fov(
+        fov: f32,
+        aspect: f32,
+        near_val: f32,
+        far_val: f32,
+    ) -> [f32; 16] {
+        let mut matrix = [0.0_f32; 16];
+        unsafe {
+            ffi::b3ComputeProjectionMatrixFOV(fov, aspect, near_val, far_val, matrix.as_mut_ptr());
+        }
+        matrix
+    }
+
+    pub fn add_user_debug_line(&mut self, options: &DebugLineOptions) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let color = options.color.unwrap_or([1.0; 3]);
+        let command = unsafe {
+            ffi::b3InitUserDebugDrawAddLine3D(
+                self.handle,
+                options.from.as_ptr(),
+                options.to.as_ptr(),
+                color.as_ptr(),
+                options.line_width,
+                options.life_time,
+            )
+        };
+
+        if let Some(parent_id) = options.parent_object_unique_id {
+            let link_index = options.parent_link_index.unwrap_or(-1);
+            unsafe { ffi::b3UserDebugItemSetParentObject(command, parent_id, link_index) };
+        }
+        if let Some(replace_id) = options.replace_item_unique_id {
+            unsafe { ffi::b3UserDebugItemSetReplaceItemUniqueId(command, replace_id) };
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_USER_DEBUG_DRAW_COMPLETED,
+        )?;
+        let unique_id = unsafe { ffi::b3GetDebugItemUniqueId(status.handle) };
+        Ok(unique_id)
+    }
+
+    pub fn add_user_debug_points(&mut self, options: &DebugPointsOptions<'_>) -> BulletResult<i32> {
+        if options.positions.len() != options.colors.len() {
+            return Err(BulletError::CommandFailed {
+                message: "pointColors length must match pointPositions",
+                code: options.colors.len() as i32,
+            });
+        }
+        if options.positions.is_empty() {
+            return Err(BulletError::CommandFailed {
+                message: "At least one point is required",
+                code: 0,
+            });
+        }
+
+        self.ensure_can_submit()?;
+        let positions = Self::flatten_points(options.positions);
+        let colors = Self::flatten_points(options.colors);
+        let command = unsafe {
+            ffi::b3InitUserDebugDrawAddPoints3D(
+                self.handle,
+                positions.as_ptr(),
+                colors.as_ptr(),
+                options.point_size,
+                options.life_time,
+                options.positions.len() as i32,
+            )
+        };
+
+        if let Some(parent_id) = options.parent_object_unique_id {
+            let link_index = options.parent_link_index.unwrap_or(-1);
+            unsafe { ffi::b3UserDebugItemSetParentObject(command, parent_id, link_index) };
+        }
+        if let Some(replace_id) = options.replace_item_unique_id {
+            unsafe { ffi::b3UserDebugItemSetReplaceItemUniqueId(command, replace_id) };
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_USER_DEBUG_DRAW_COMPLETED,
+        )?;
+        let unique_id = unsafe { ffi::b3GetDebugItemUniqueId(status.handle) };
+        Ok(unique_id)
+    }
+
+    pub fn add_user_debug_text(&mut self, options: &DebugTextOptions<'_>) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let color = options.color.unwrap_or([1.0; 3]);
+        let text = CString::new(options.text)?;
+        let command = unsafe {
+            ffi::b3InitUserDebugDrawAddText3D(
+                self.handle,
+                text.as_ptr(),
+                options.position.as_ptr(),
+                color.as_ptr(),
+                options.size,
+                options.life_time,
+            )
+        };
+
+        if let Some(parent_id) = options.parent_object_unique_id {
+            let link_index = options.parent_link_index.unwrap_or(-1);
+            unsafe { ffi::b3UserDebugItemSetParentObject(command, parent_id, link_index) };
+        }
+        if let Some(orientation) = options.orientation {
+            const USER_DEBUG_HAS_TEXT_ORIENTATION: i32 = 512;
+            unsafe {
+                ffi::b3UserDebugTextSetOptionFlags(command, USER_DEBUG_HAS_TEXT_ORIENTATION);
+                ffi::b3UserDebugTextSetOrientation(command, orientation.as_ptr());
+            }
+        }
+        if let Some(replace_id) = options.replace_item_unique_id {
+            unsafe { ffi::b3UserDebugItemSetReplaceItemUniqueId(command, replace_id) };
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_USER_DEBUG_DRAW_COMPLETED,
+        )?;
+        let unique_id = unsafe { ffi::b3GetDebugItemUniqueId(status.handle) };
+        Ok(unique_id)
+    }
+
+    pub fn add_user_debug_parameter(
+        &mut self,
+        options: &DebugParameterOptions<'_>,
+    ) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let name = CString::new(options.name)?;
+        let command = unsafe {
+            ffi::b3InitUserDebugAddParameter(
+                self.handle,
+                name.as_ptr(),
+                options.range_min,
+                options.range_max,
+                options.start_value,
+            )
+        };
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_USER_DEBUG_DRAW_PARAMETER_COMPLETED,
+        )?;
+        let unique_id = unsafe { ffi::b3GetDebugItemUniqueId(status.handle) };
+        Ok(unique_id)
+    }
+
+    pub fn read_user_debug_parameter(&mut self, parameter_id: i32) -> BulletResult<f64> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitUserDebugReadParameter(self.handle, parameter_id) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_USER_DEBUG_DRAW_PARAMETER_COMPLETED,
+        )?;
+
+        let mut value = 0.0_f64;
+        let success = unsafe { ffi::b3GetStatusDebugParameterValue(status.handle, &mut value) };
+        if success == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Unable to read user debug parameter",
+                code: success,
+            });
+        }
+        Ok(value)
+    }
+
+    pub fn remove_user_debug_item(&mut self, item_unique_id: i32) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitUserDebugDrawRemove(self.handle, item_unique_id) };
+        let _ = self.submit_command(command)?;
+        Ok(())
+    }
+
+    pub fn remove_all_user_debug_items(&mut self) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitUserDebugDrawRemoveAll(self.handle) };
+        let _ = self.submit_command(command)?;
+        Ok(())
+    }
+
+    pub fn remove_all_user_parameters(&mut self) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitUserRemoveAllParameters(self.handle) };
+        let _ = self.submit_command(command)?;
+        Ok(())
+    }
+
+    pub fn set_debug_object_color(
+        &mut self,
+        object_unique_id: i32,
+        link_index: i32,
+        color: Option<[f64; 3]>,
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitDebugDrawingCommand(self.handle) };
+        unsafe {
+            if let Some(color) = color {
+                ffi::b3SetDebugObjectColor(command, object_unique_id, link_index, color.as_ptr());
+            } else {
+                ffi::b3RemoveDebugObjectColor(command, object_unique_id, link_index);
+            }
+        }
+        let _ = self.submit_command(command)?;
+        Ok(())
+    }
+
+    pub fn get_debug_visualizer_camera(&mut self) -> BulletResult<DebugVisualizerCamera> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRequestOpenGLVisualizerCameraCommand(self.handle) };
+        let status = self.submit_command(command)?;
+
+        let mut camera = ffi::b3OpenGLVisualizerCameraInfo::default();
+        let success = unsafe { ffi::b3GetStatusOpenGLVisualizerCamera(status.handle, &mut camera) };
+        if success == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Unable to fetch debug visualizer camera",
+                code: success,
+            });
+        }
+
+        Ok(DebugVisualizerCamera {
+            width: camera.m_width,
+            height: camera.m_height,
+            view_matrix: camera.m_viewMatrix,
+            projection_matrix: camera.m_projectionMatrix,
+            camera_up: camera.m_camUp,
+            camera_forward: camera.m_camForward,
+            horizontal: camera.m_horizontal,
+            vertical: camera.m_vertical,
+            yaw: camera.m_yaw,
+            pitch: camera.m_pitch,
+            distance: camera.m_dist,
+            target: camera.m_target,
+        })
+    }
+
+    pub fn configure_debug_visualizer(
+        &mut self,
+        options: &ConfigureDebugVisualizerOptions,
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitConfigureOpenGLVisualizer(self.handle) };
+
+        if let Some(flag) = options.flag {
+            let enabled = options.enable.unwrap_or(true) as i32;
+            unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetVisualizationFlags(command, flag, enabled)
+            };
+        }
+        if let Some(mut position) = options.light_position {
+            unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetLightPosition(command, position.as_mut_ptr())
+            };
+        }
+        if let Some(resolution) = options.shadow_map_resolution
+            && resolution > 0
+        {
+            unsafe { ffi::b3ConfigureOpenGLVisualizerSetShadowMapResolution(command, resolution) };
+        }
+        if let Some(world_size) = options.shadow_map_world_size
+            && world_size > 0
+        {
+            unsafe { ffi::b3ConfigureOpenGLVisualizerSetShadowMapWorldSize(command, world_size) };
+        }
+        if let Some(interval) = options.remote_sync_transform_interval
+            && interval >= 0.0
+        {
+            unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetRemoteSyncTransformInterval(command, interval)
+            };
+        }
+        if let Some(intensity) = options.shadow_map_intensity
+            && intensity >= 0.0
+        {
+            unsafe { ffi::b3ConfigureOpenGLVisualizerSetShadowMapIntensity(command, intensity) };
+        }
+        if let Some(mut rgb) = options.rgb_background {
+            unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetLightRgbBackground(command, rgb.as_mut_ptr())
+            };
+        }
+
+        let _ = self.submit_command(command)?;
+        Ok(())
+    }
+
+    pub fn reset_debug_visualizer_camera(
+        &mut self,
+        options: &ResetDebugVisualizerCameraOptions,
+    ) -> BulletResult<()> {
+        if options.distance < 0.0 {
+            return Err(BulletError::CommandFailed {
+                message: "cameraDistance must be non-negative",
+                code: -1,
+            });
+        }
+
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitConfigureOpenGLVisualizer(self.handle) };
+        unsafe {
+            ffi::b3ConfigureOpenGLVisualizerSetViewMatrix(
+                command,
+                options.distance,
+                options.pitch,
+                options.yaw,
+                options.target.as_ptr(),
+            );
+        }
+        let _ = self.submit_command(command)?;
+        Ok(())
+    }
+
+    pub fn get_visual_shape_data(
+        &mut self,
+        object_unique_id: i32,
+    ) -> BulletResult<Vec<VisualShapeData>> {
+        self.ensure_can_submit()?;
+        let command =
+            unsafe { ffi::b3InitRequestVisualShapeInformation(self.handle, object_unique_id) };
+        let _status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_VISUAL_SHAPE_INFO_COMPLETED,
+        )?;
+        let mut info = ffi::b3VisualShapeInformation::default();
+        unsafe { ffi::b3GetVisualShapeInformation(self.handle, &mut info) };
+        Ok(Self::collect_visual_shapes(&info))
+    }
+
+    pub fn get_collision_shape_data(
+        &mut self,
+        object_unique_id: i32,
+        link_index: Option<i32>,
+    ) -> BulletResult<Vec<CollisionShapeData>> {
+        self.ensure_can_submit()?;
+        let link_index = link_index.unwrap_or(-1);
+        let command = unsafe {
+            ffi::b3InitRequestCollisionShapeInformation(self.handle, object_unique_id, link_index)
+        };
+        let _status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_COLLISION_SHAPE_INFO_COMPLETED,
+        )?;
+        let mut info = ffi::b3CollisionShapeInformation::default();
+        unsafe { ffi::b3GetCollisionShapeInformation(self.handle, &mut info) };
+        Ok(Self::collect_collision_shapes(&info))
+    }
 }
 
 /// ! =====================================================================================================================================
@@ -3663,7 +4324,261 @@ impl PhysicsClient {
 /// | setTimeOut | Pending | Client timeout |
 /// | getAPIVersion | Pending | Static constant |
 impl PhysicsClient {
-    fn _vr_input_logging_plugins_misc() {}
+    pub fn get_vr_events(
+        &mut self,
+        options: &VrEventsOptions,
+    ) -> BulletResult<Vec<VrControllerEvent>> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3RequestVREventsCommandInit(self.handle) };
+        let filter = options
+            .device_type_filter
+            .unwrap_or(ffi::VR_DEVICE_CONTROLLER);
+        unsafe {
+            ffi::b3VREventsSetDeviceTypeFilter(command, filter);
+        }
+
+        let _status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_VR_EVENTS_DATA_COMPLETED,
+        )?;
+
+        let mut raw = ffi::b3VREventsData::default();
+        unsafe { ffi::b3GetVREventsData(self.handle, &mut raw) };
+        Ok(Self::collect_vr_events(
+            &raw,
+            options.include_aux_analog_axes,
+        ))
+    }
+
+    pub fn set_vr_camera_state(&mut self, options: &VrCameraStateOptions) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3SetVRCameraStateCommandInit(self.handle) };
+
+        if let Some(position) = options.root_position {
+            unsafe { ffi::b3SetVRCameraRootPosition(command, position.as_ptr()) };
+        }
+        if let Some(orientation) = options.root_orientation {
+            unsafe { ffi::b3SetVRCameraRootOrientation(command, orientation.as_ptr()) };
+        }
+        if let Some(object_id) = options.tracking_object_unique_id {
+            unsafe { ffi::b3SetVRCameraTrackingObject(command, object_id) };
+        }
+        if let Some(flag) = options.tracking_flag {
+            unsafe { ffi::b3SetVRCameraTrackingObjectFlag(command, flag) };
+        }
+
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn get_keyboard_events(&mut self) -> BulletResult<Vec<KeyboardEvent>> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3RequestKeyboardEventsCommandInit(self.handle) };
+        let _status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_KEYBOARD_EVENTS_DATA_COMPLETED,
+        )?;
+
+        let mut raw = ffi::b3KeyboardEventsData::default();
+        unsafe { ffi::b3GetKeyboardEventsData(self.handle, &mut raw) };
+        Ok(Self::collect_keyboard_events(&raw))
+    }
+
+    pub fn get_mouse_events(&mut self) -> BulletResult<Vec<MouseEvent>> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3RequestMouseEventsCommandInit(self.handle) };
+        let _status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_MOUSE_EVENTS_DATA_COMPLETED,
+        )?;
+
+        let mut raw = ffi::b3MouseEventsData::default();
+        unsafe { ffi::b3GetMouseEventsData(self.handle, &mut raw) };
+        Ok(Self::collect_mouse_events(&raw))
+    }
+
+    pub fn start_state_logging(&mut self, options: &StateLoggingOptions<'_>) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let file_c = Self::path_to_cstring(options.file_name)?;
+        let command = unsafe { ffi::b3StateLoggingCommandInit(self.handle) };
+        unsafe { ffi::b3StateLoggingStart(command, options.logging_type, file_c.as_ptr()) };
+
+        if let Some(object_ids) = options.object_unique_ids {
+            for &object_id in object_ids {
+                unsafe { ffi::b3StateLoggingAddLoggingObjectUniqueId(command, object_id) };
+            }
+        }
+        if let Some(max_log_dof) = options.max_log_dof {
+            unsafe { ffi::b3StateLoggingSetMaxLogDof(command, max_log_dof) };
+        }
+        if let Some(body_a) = options.body_unique_id_a {
+            unsafe { ffi::b3StateLoggingSetBodyAUniqueId(command, body_a) };
+        }
+        if let Some(body_b) = options.body_unique_id_b {
+            unsafe { ffi::b3StateLoggingSetBodyBUniqueId(command, body_b) };
+        }
+        if let Some(link_a) = options.link_index_a {
+            unsafe { ffi::b3StateLoggingSetLinkIndexA(command, link_a) };
+        }
+        if let Some(link_b) = options.link_index_b {
+            unsafe { ffi::b3StateLoggingSetLinkIndexB(command, link_b) };
+        }
+        if let Some(device_filter) = options.device_type_filter {
+            unsafe { ffi::b3StateLoggingSetDeviceTypeFilter(command, device_filter) };
+        }
+        if let Some(flags) = options.log_flags {
+            unsafe { ffi::b3StateLoggingSetLogFlags(command, flags) };
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_STATE_LOGGING_START_COMPLETED,
+        )?;
+
+        let logging_id = unsafe { ffi::b3GetStatusLoggingUniqueId(status.handle) };
+        if logging_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to start state logging",
+                code: logging_id,
+            });
+        }
+        Ok(logging_id)
+    }
+
+    pub fn stop_state_logging(&mut self, logging_id: i32) -> BulletResult<()> {
+        if logging_id < 0 {
+            return Ok(());
+        }
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3StateLoggingCommandInit(self.handle) };
+        unsafe { ffi::b3StateLoggingStop(command, logging_id) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_STATE_LOGGING_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn load_plugin(&mut self, plugin_path: &str, postfix: Option<&str>) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let path_c = CString::new(plugin_path)?;
+        let postfix_c = postfix.map(CString::new).transpose()?;
+        let command = unsafe { ffi::b3CreateCustomCommand(self.handle) };
+        unsafe { ffi::b3CustomCommandLoadPlugin(command, path_c.as_ptr()) };
+        if let Some(ref postfix_c) = postfix_c {
+            unsafe { ffi::b3CustomCommandLoadPluginSetPostFix(command, postfix_c.as_ptr()) };
+        }
+
+        let status = self.submit_command(command)?;
+        let plugin_id = unsafe { ffi::b3GetStatusPluginUniqueId(status.handle) };
+        if plugin_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to load plugin",
+                code: plugin_id,
+            });
+        }
+        Ok(plugin_id)
+    }
+
+    pub fn unload_plugin(&mut self, plugin_unique_id: i32) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreateCustomCommand(self.handle) };
+        unsafe { ffi::b3CustomCommandUnloadPlugin(command, plugin_unique_id) };
+        self.submit_command(command)?;
+        Ok(())
+    }
+
+    pub fn execute_plugin_command(
+        &mut self,
+        options: &PluginCommandOptions<'_>,
+    ) -> BulletResult<PluginCommandResult> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreateCustomCommand(self.handle) };
+        let text_c = options.text_argument.map(CString::new).transpose()?;
+        let text_ptr = text_c.as_ref().map_or(ptr::null(), |value| value.as_ptr());
+        unsafe {
+            ffi::b3CustomCommandExecutePluginCommand(command, options.plugin_unique_id, text_ptr);
+        }
+
+        if let Some(int_args) = options.int_args {
+            for &value in int_args {
+                unsafe { ffi::b3CustomCommandExecuteAddIntArgument(command, value) };
+            }
+        }
+        if let Some(float_args) = options.float_args {
+            for &value in float_args {
+                unsafe { ffi::b3CustomCommandExecuteAddFloatArgument(command, value) };
+            }
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CUSTOM_COMMAND_COMPLETED,
+        )?;
+
+        let status_code = unsafe { ffi::b3GetStatusPluginCommandResult(status.handle) };
+        let mut raw = ffi::b3UserDataValue {
+            m_type: 0,
+            m_length: 0,
+            m_data1: ptr::null(),
+        };
+        let has_data =
+            unsafe { ffi::b3GetStatusPluginCommandReturnData(self.handle, &mut raw) } != 0;
+        let return_data = if has_data && raw.m_length > 0 && !raw.m_data1.is_null() {
+            let len = raw.m_length as usize;
+            let bytes = unsafe { slice::from_raw_parts(raw.m_data1, len) };
+            let data = bytes.iter().map(|&b| b as i32).collect();
+            Some(PluginCommandReturnData {
+                value_type: raw.m_type,
+                data,
+            })
+        } else {
+            None
+        };
+
+        Ok(PluginCommandResult {
+            status: status_code,
+            return_data,
+        })
+    }
+
+    pub fn submit_profile_timing(&mut self, event_name: Option<&str>) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let name_c = event_name.map(CString::new).transpose()?;
+        let command = unsafe {
+            ffi::b3ProfileTimingCommandInit(
+                self.handle,
+                name_c.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+            )
+        };
+        unsafe {
+            ffi::b3SetProfileTimingType(command, if name_c.is_some() { 0 } else { 1 });
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn set_time_out(&mut self, time_out_seconds: f64) -> BulletResult<()> {
+        if time_out_seconds < 0.0 {
+            return Err(BulletError::CommandFailed {
+                message: "Timeout must be non-negative",
+                code: -1,
+            });
+        }
+        self.ensure_can_submit()?;
+        unsafe { ffi::b3SetTimeOut(self.handle, time_out_seconds) };
+        Ok(())
+    }
+
+    pub fn get_api_version(&self) -> i32 {
+        ffi::SHARED_MEMORY_MAGIC_NUMBER
+    }
 }
 
 /// ! =====================================================================================================================================

@@ -4,6 +4,18 @@ use std::ffi::c_void;
 use std::os::raw::{c_char, c_int, c_uchar};
 use std::ptr::NonNull;
 pub const SHARED_MEMORY_KEY: i32 = 12347;
+pub const SHARED_MEMORY_MAGIC_NUMBER: i32 = 202010061;
+pub const MAX_VR_ANALOG_AXIS: usize = 5;
+pub const MAX_VR_BUTTONS: usize = 64;
+pub const MAX_VR_CONTROLLERS: usize = 8;
+pub const VR_CONTROLLER_MOVE_EVENT: i32 = 1;
+pub const VR_CONTROLLER_BUTTON_EVENT: i32 = 2;
+pub const VR_HMD_MOVE_EVENT: i32 = 4;
+pub const VR_GENERIC_TRACKER_MOVE_EVENT: i32 = 8;
+pub const VR_DEVICE_CONTROLLER: i32 = 1;
+pub const VR_DEVICE_HMD: i32 = 2;
+pub const VR_DEVICE_GENERIC_TRACKER: i32 = 4;
+pub const VR_CAMERA_TRACK_OBJECT_ORIENTATION: i32 = 1;
 
 #[repr(C)]
 pub struct b3PhysicsClientHandle__ {
@@ -26,6 +38,38 @@ pub const MAX_SDF_BODIES: u32 = 512;
 pub const USER_DATA_VALUE_TYPE_BYTES: i32 = 0;
 pub const USER_DATA_VALUE_TYPE_STRING: i32 = 1;
 unsafe extern "C" {
+    pub fn b3CreateCustomCommand(physClient: b3PhysicsClientHandle) -> b3SharedMemoryCommandHandle;
+    pub fn b3CustomCommandLoadPlugin(
+        commandHandle: b3SharedMemoryCommandHandle,
+        pluginPath: *const c_char,
+    );
+    pub fn b3CustomCommandLoadPluginSetPostFix(
+        commandHandle: b3SharedMemoryCommandHandle,
+        postFix: *const c_char,
+    );
+    pub fn b3GetStatusPluginUniqueId(statusHandle: b3SharedMemoryStatusHandle) -> c_int;
+    pub fn b3GetStatusPluginCommandResult(statusHandle: b3SharedMemoryStatusHandle) -> c_int;
+    pub fn b3GetStatusPluginCommandReturnData(
+        physClient: b3PhysicsClientHandle,
+        valueOut: *mut b3UserDataValue,
+    ) -> c_int;
+    pub fn b3CustomCommandUnloadPlugin(
+        commandHandle: b3SharedMemoryCommandHandle,
+        pluginUniqueId: c_int,
+    );
+    pub fn b3CustomCommandExecutePluginCommand(
+        commandHandle: b3SharedMemoryCommandHandle,
+        pluginUniqueId: c_int,
+        textArguments: *const c_char,
+    );
+    pub fn b3CustomCommandExecuteAddIntArgument(
+        commandHandle: b3SharedMemoryCommandHandle,
+        intVal: c_int,
+    );
+    pub fn b3CustomCommandExecuteAddFloatArgument(
+        commandHandle: b3SharedMemoryCommandHandle,
+        floatVal: f32,
+    );
     pub fn b3ConnectPhysicsDirect() -> Option<b3PhysicsClientHandle>;
     pub fn b3CreateInProcessPhysicsServerAndConnect(
         argc: c_int,
@@ -92,6 +136,30 @@ unsafe extern "C" {
         commandHandle: b3SharedMemoryCommandHandle,
         flag: c_int,
         enabled: c_int,
+    );
+    pub fn b3ConfigureOpenGLVisualizerSetLightPosition(
+        commandHandle: b3SharedMemoryCommandHandle,
+        lightPosition: *const f32,
+    );
+    pub fn b3ConfigureOpenGLVisualizerSetShadowMapResolution(
+        commandHandle: b3SharedMemoryCommandHandle,
+        shadowMapResolution: c_int,
+    );
+    pub fn b3ConfigureOpenGLVisualizerSetShadowMapIntensity(
+        commandHandle: b3SharedMemoryCommandHandle,
+        shadowMapIntensity: f64,
+    );
+    pub fn b3ConfigureOpenGLVisualizerSetLightRgbBackground(
+        commandHandle: b3SharedMemoryCommandHandle,
+        rgbBackground: *const f32,
+    );
+    pub fn b3ConfigureOpenGLVisualizerSetShadowMapWorldSize(
+        commandHandle: b3SharedMemoryCommandHandle,
+        shadowMapWorldSize: c_int,
+    );
+    pub fn b3ConfigureOpenGLVisualizerSetRemoteSyncTransformInterval(
+        commandHandle: b3SharedMemoryCommandHandle,
+        remoteSyncTransformInterval: f64,
     );
     pub fn b3CanSubmitCommand(physClient: b3PhysicsClientHandle) -> c_int;
     pub fn b3SubmitClientCommandAndWaitStatus(
@@ -939,6 +1007,14 @@ unsafe extern "C" {
         lineWidth: f64,
         lifeTime: f64,
     ) -> b3SharedMemoryCommandHandle;
+    pub fn b3InitUserDebugDrawAddPoints3D(
+        physClient: b3PhysicsClientHandle,
+        positionsXYZ: *const f64,
+        colorsRGB: *const f64,
+        pointSize: f64,
+        lifeTime: f64,
+        pointNum: c_int,
+    ) -> b3SharedMemoryCommandHandle;
     pub fn b3InitUserDebugDrawAddText3D(
         physClient: b3PhysicsClientHandle,
         txt: *const c_char,
@@ -971,6 +1047,9 @@ unsafe extern "C" {
     ) -> b3SharedMemoryCommandHandle;
 
     pub fn b3InitUserDebugDrawRemoveAll(
+        physClient: b3PhysicsClientHandle,
+    ) -> b3SharedMemoryCommandHandle;
+    pub fn b3InitUserRemoveAllParameters(
         physClient: b3PhysicsClientHandle,
     ) -> b3SharedMemoryCommandHandle;
 
@@ -1177,6 +1256,9 @@ unsafe extern "C" {
         physClient: b3PhysicsClientHandle,
         mouseEventsData: *mut b3MouseEventsData,
     );
+    pub fn b3RequestKeyboardEventsCommandInit2(
+        commandHandle: b3SharedMemoryCommandHandle,
+    ) -> b3SharedMemoryCommandHandle;
     pub fn b3StateLoggingCommandInit(
         physClient: b3PhysicsClientHandle,
     ) -> b3SharedMemoryCommandHandle;
@@ -1253,6 +1335,33 @@ unsafe extern "C" {
     pub fn b3SetTimeOut(physClient: b3PhysicsClientHandle, timeOutInSeconds: f64);
 
     pub fn b3GetTimeOut(physClient: b3PhysicsClientHandle) -> f64;
+    pub fn b3RequestVREventsCommandInit(
+        physClient: b3PhysicsClientHandle,
+    ) -> b3SharedMemoryCommandHandle;
+    pub fn b3VREventsSetDeviceTypeFilter(
+        commandHandle: b3SharedMemoryCommandHandle,
+        deviceTypeFilter: c_int,
+    );
+    pub fn b3GetVREventsData(physClient: b3PhysicsClientHandle, vrEventsData: *mut b3VREventsData);
+    pub fn b3SetVRCameraStateCommandInit(
+        physClient: b3PhysicsClientHandle,
+    ) -> b3SharedMemoryCommandHandle;
+    pub fn b3SetVRCameraRootPosition(
+        commandHandle: b3SharedMemoryCommandHandle,
+        rootPos: *const f64,
+    ) -> c_int;
+    pub fn b3SetVRCameraRootOrientation(
+        commandHandle: b3SharedMemoryCommandHandle,
+        rootOrn: *const f64,
+    ) -> c_int;
+    pub fn b3SetVRCameraTrackingObject(
+        commandHandle: b3SharedMemoryCommandHandle,
+        objectUniqueId: c_int,
+    ) -> c_int;
+    pub fn b3SetVRCameraTrackingObjectFlag(
+        commandHandle: b3SharedMemoryCommandHandle,
+        flag: c_int,
+    ) -> c_int;
     #[doc = "We are currently not reading the sensor information from the URDF file, and programmatically assign sensors."]
     #[doc = "This is rather inconsistent, to mix programmatical creation with loading from file."]
     pub fn b3CreateSensorCommandInit(
@@ -1602,10 +1711,10 @@ unsafe extern "C" {
         linkIndex: c_int,
     ) -> b3SharedMemoryCommandHandle;
 
-    // pub fn b3GetCollisionShapeInformation(
-    //     physClient: b3PhysicsClientHandle,
-    //     collisionShapeInfo: *mut b3CollisionShapeInformation,
-    // );
+    pub fn b3GetCollisionShapeInformation(
+        physClient: b3PhysicsClientHandle,
+        collisionShapeInfo: *mut b3CollisionShapeInformation,
+    );
 
     pub fn b3InitLoadTexture(
         physClient: b3PhysicsClientHandle,
@@ -2199,6 +2308,52 @@ impl Default for b3CameraImageData {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct b3VRControllerEvent {
+    pub m_controllerId: c_int,
+    pub m_deviceType: c_int,
+    pub m_numMoveEvents: c_int,
+    pub m_numButtonEvents: c_int,
+    pub m_pos: [f32; 4],
+    pub m_orn: [f32; 4],
+    pub m_analogAxis: f32,
+    pub m_auxAnalogAxis: [f32; MAX_VR_ANALOG_AXIS * 2],
+    pub m_buttons: [c_int; MAX_VR_BUTTONS],
+}
+
+impl Default for b3VRControllerEvent {
+    fn default() -> Self {
+        b3VRControllerEvent {
+            m_controllerId: 0,
+            m_deviceType: 0,
+            m_numMoveEvents: 0,
+            m_numButtonEvents: 0,
+            m_pos: [0.0; 4],
+            m_orn: [0.0; 4],
+            m_analogAxis: 0.0,
+            m_auxAnalogAxis: [0.0; MAX_VR_ANALOG_AXIS * 2],
+            m_buttons: [0; MAX_VR_BUTTONS],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct b3VREventsData {
+    pub m_numControllerEvents: c_int,
+    pub m_controllerEvents: *mut b3VRControllerEvent,
+}
+
+impl Default for b3VREventsData {
+    fn default() -> Self {
+        b3VREventsData {
+            m_numControllerEvents: 0,
+            m_controllerEvents: [].as_mut_ptr(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct b3KeyboardEventsData {
     pub m_numKeyboardEvents: c_int,
     pub m_keyboardEvents: *mut b3KeyboardEvent,
@@ -2299,6 +2454,30 @@ pub struct b3VisualShapeData {
     pub m_tinyRendererTextureId: c_int,
     pub m_textureUniqueId: c_int,
     pub m_openglTextureId: c_int,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct b3CollisionShapeInformation {
+    pub m_numCollisionShapes: c_int,
+    pub m_collisionShapeData: *mut b3CollisionShapeData,
+}
+impl Default for b3CollisionShapeInformation {
+    fn default() -> Self {
+        b3CollisionShapeInformation {
+            m_numCollisionShapes: 0,
+            m_collisionShapeData: [].as_mut_ptr(),
+        }
+    }
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct b3CollisionShapeData {
+    pub m_objectUniqueId: c_int,
+    pub m_linkIndex: c_int,
+    pub m_collisionGeometryType: c_int,
+    pub m_dimensions: [f64; 3usize],
+    pub m_meshAssetFileName: [c_char; 1024usize],
+    pub m_localCollisionFrame: [f64; 7usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

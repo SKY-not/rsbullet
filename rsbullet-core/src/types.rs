@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use nalgebra as na;
 use rsbullet_sys as ffi;
@@ -506,6 +506,334 @@ pub struct RayTestBatchOptions<'a> {
     pub fraction_epsilon: Option<f64>,
     pub ray_from_positions: &'a [[f64; 3]],
     pub ray_to_positions: &'a [[f64; 3]],
+}
+
+// =================== Rendering & Debug Types ===================
+
+#[derive(Debug, Clone)]
+pub struct CameraImage {
+    pub width: i32,
+    pub height: i32,
+    pub rgba: Vec<u8>,
+    pub depth: Vec<f32>,
+    pub segmentation_mask: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CameraImageRequest {
+    pub width: i32,
+    pub height: i32,
+    pub view_matrix: Option<[f32; 16]>,
+    pub projection_matrix: Option<[f32; 16]>,
+    pub light_direction: Option<[f32; 3]>,
+    pub light_color: Option<[f32; 3]>,
+    pub light_distance: Option<f32>,
+    pub shadow: Option<bool>,
+    pub light_ambient_coeff: Option<f32>,
+    pub light_diffuse_coeff: Option<f32>,
+    pub light_specular_coeff: Option<f32>,
+    pub renderer: Option<i32>,
+    pub flags: Option<i32>,
+    pub projective_texture_view: Option<[f32; 16]>,
+    pub projective_texture_projection: Option<[f32; 16]>,
+}
+
+impl CameraImageRequest {
+    pub fn new(width: i32, height: i32) -> Self {
+        Self {
+            width,
+            height,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugLineOptions {
+    pub from: [f64; 3],
+    pub to: [f64; 3],
+    pub color: Option<[f64; 3]>,
+    pub line_width: f64,
+    pub life_time: f64,
+    pub parent_object_unique_id: Option<i32>,
+    pub parent_link_index: Option<i32>,
+    pub replace_item_unique_id: Option<i32>,
+}
+
+impl Default for DebugLineOptions {
+    fn default() -> Self {
+        Self {
+            from: [0.0; 3],
+            to: [0.0, 0.0, 1.0],
+            color: None,
+            line_width: 1.0,
+            life_time: 0.0,
+            parent_object_unique_id: None,
+            parent_link_index: None,
+            replace_item_unique_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugPointsOptions<'a> {
+    pub positions: &'a [[f64; 3]],
+    pub colors: &'a [[f64; 3]],
+    pub point_size: f64,
+    pub life_time: f64,
+    pub parent_object_unique_id: Option<i32>,
+    pub parent_link_index: Option<i32>,
+    pub replace_item_unique_id: Option<i32>,
+}
+
+impl<'a> Default for DebugPointsOptions<'a> {
+    fn default() -> Self {
+        static EMPTY: [[f64; 3]; 0] = [];
+        Self {
+            positions: &EMPTY,
+            colors: &EMPTY,
+            point_size: 1.0,
+            life_time: 0.0,
+            parent_object_unique_id: None,
+            parent_link_index: None,
+            replace_item_unique_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugTextOptions<'a> {
+    pub text: &'a str,
+    pub position: [f64; 3],
+    pub color: Option<[f64; 3]>,
+    pub size: f64,
+    pub life_time: f64,
+    pub orientation: Option<[f64; 4]>,
+    pub parent_object_unique_id: Option<i32>,
+    pub parent_link_index: Option<i32>,
+    pub replace_item_unique_id: Option<i32>,
+}
+
+impl<'a> Default for DebugTextOptions<'a> {
+    fn default() -> Self {
+        Self {
+            text: "",
+            position: [0.0; 3],
+            color: None,
+            size: 1.0,
+            life_time: 0.0,
+            orientation: None,
+            parent_object_unique_id: None,
+            parent_link_index: None,
+            replace_item_unique_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugParameterOptions<'a> {
+    pub name: &'a str,
+    pub range_min: f64,
+    pub range_max: f64,
+    pub start_value: f64,
+}
+
+impl<'a> Default for DebugParameterOptions<'a> {
+    fn default() -> Self {
+        Self {
+            name: "",
+            range_min: 0.0,
+            range_max: 1.0,
+            start_value: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugVisualizerCamera {
+    pub width: i32,
+    pub height: i32,
+    pub view_matrix: [f32; 16],
+    pub projection_matrix: [f32; 16],
+    pub camera_up: [f32; 3],
+    pub camera_forward: [f32; 3],
+    pub horizontal: [f32; 3],
+    pub vertical: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub distance: f32,
+    pub target: [f32; 3],
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ConfigureDebugVisualizerOptions {
+    pub flag: Option<i32>,
+    pub enable: Option<bool>,
+    pub light_position: Option<[f32; 3]>,
+    pub shadow_map_resolution: Option<i32>,
+    pub shadow_map_world_size: Option<i32>,
+    pub remote_sync_transform_interval: Option<f64>,
+    pub shadow_map_intensity: Option<f64>,
+    pub rgb_background: Option<[f32; 3]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResetDebugVisualizerCameraOptions {
+    pub distance: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub target: [f32; 3],
+}
+
+#[derive(Debug, Clone)]
+pub struct VisualShapeData {
+    pub object_unique_id: i32,
+    pub link_index: i32,
+    pub geometry_type: i32,
+    pub dimensions: [f64; 3],
+    pub mesh_asset_file_name: String,
+    pub local_visual_frame_position: [f64; 3],
+    pub local_visual_frame_orientation: [f64; 4],
+    pub rgba_color: [f64; 4],
+    pub tiny_renderer_texture_id: i32,
+    pub texture_unique_id: i32,
+    pub opengl_texture_id: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CollisionShapeData {
+    pub object_unique_id: i32,
+    pub link_index: i32,
+    pub geometry_type: i32,
+    pub dimensions: [f64; 3],
+    pub mesh_asset_file_name: String,
+    pub local_collision_frame_position: [f64; 3],
+    pub local_collision_frame_orientation: [f64; 4],
+}
+
+// =================== VR, Input, Logging, Plugin Types ===================
+
+pub const VR_EVENT_FLAG_CONTROLLER_MOVE: i32 = ffi::VR_CONTROLLER_MOVE_EVENT;
+pub const VR_EVENT_FLAG_CONTROLLER_BUTTON: i32 = ffi::VR_CONTROLLER_BUTTON_EVENT;
+pub const VR_EVENT_FLAG_HMD_MOVE: i32 = ffi::VR_HMD_MOVE_EVENT;
+pub const VR_EVENT_FLAG_GENERIC_TRACKER_MOVE: i32 = ffi::VR_GENERIC_TRACKER_MOVE_EVENT;
+pub const VR_DEVICE_FILTER_CONTROLLER: i32 = ffi::VR_DEVICE_CONTROLLER;
+pub const VR_DEVICE_FILTER_HMD: i32 = ffi::VR_DEVICE_HMD;
+pub const VR_DEVICE_FILTER_GENERIC_TRACKER: i32 = ffi::VR_DEVICE_GENERIC_TRACKER;
+pub const VR_BUTTON_IS_DOWN: i32 = 1;
+pub const VR_BUTTON_TRIGGERED: i32 = 2;
+pub const VR_BUTTON_RELEASED: i32 = 4;
+pub const VR_CAMERA_TRACK_OBJECT_ORIENTATION: i32 = ffi::VR_CAMERA_TRACK_OBJECT_ORIENTATION;
+pub const VR_MAX_ANALOG_AXIS: usize = ffi::MAX_VR_ANALOG_AXIS;
+pub const VR_MAX_BUTTONS: usize = ffi::MAX_VR_BUTTONS;
+
+#[derive(Debug, Clone)]
+pub struct VrControllerEvent {
+    pub controller_id: i32,
+    pub device_type: i32,
+    pub num_move_events: i32,
+    pub num_button_events: i32,
+    pub position: [f32; 3],
+    pub orientation: [f32; 4],
+    pub analog_axis: f32,
+    pub aux_analog_axis: [f32; VR_MAX_ANALOG_AXIS * 2],
+    pub buttons: [i32; VR_MAX_BUTTONS],
+}
+
+impl Default for VrControllerEvent {
+    fn default() -> Self {
+        Self {
+            controller_id: 0,
+            device_type: 0,
+            num_move_events: 0,
+            num_button_events: 0,
+            position: [0.0; 3],
+            orientation: [0.0; 4],
+            analog_axis: 0.0,
+            aux_analog_axis: [0.0; VR_MAX_ANALOG_AXIS * 2],
+            buttons: [0; VR_MAX_BUTTONS],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VrEventsOptions {
+    pub device_type_filter: Option<i32>,
+    pub include_aux_analog_axes: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VrCameraStateOptions {
+    pub root_position: Option<[f64; 3]>,
+    pub root_orientation: Option<[f64; 4]>,
+    pub tracking_object_unique_id: Option<i32>,
+    pub tracking_flag: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KeyboardEvent {
+    pub key_code: i32,
+    pub key_state: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MouseEvent {
+    pub event_type: i32,
+    pub mouse_pos_x: f32,
+    pub mouse_pos_y: f32,
+    pub button_index: i32,
+    pub button_state: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct StateLoggingOptions<'a> {
+    pub logging_type: i32,
+    pub file_name: &'a Path,
+    pub object_unique_ids: Option<&'a [i32]>,
+    pub max_log_dof: Option<i32>,
+    pub body_unique_id_a: Option<i32>,
+    pub body_unique_id_b: Option<i32>,
+    pub link_index_a: Option<i32>,
+    pub link_index_b: Option<i32>,
+    pub device_type_filter: Option<i32>,
+    pub log_flags: Option<i32>,
+}
+
+impl<'a> StateLoggingOptions<'a> {
+    pub fn new(logging_type: i32, file_name: &'a Path) -> Self {
+        Self {
+            logging_type,
+            file_name,
+            object_unique_ids: None,
+            max_log_dof: None,
+            body_unique_id_a: None,
+            body_unique_id_b: None,
+            link_index_a: None,
+            link_index_b: None,
+            device_type_filter: None,
+            log_flags: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginCommandOptions<'a> {
+    pub plugin_unique_id: i32,
+    pub text_argument: Option<&'a str>,
+    pub int_args: Option<&'a [i32]>,
+    pub float_args: Option<&'a [f32]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginCommandReturnData {
+    pub value_type: i32,
+    pub data: Vec<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginCommandResult {
+    pub status: i32,
+    pub return_data: Option<PluginCommandReturnData>,
 }
 
 // =================== Asset Creation & Mutation Types ===================
