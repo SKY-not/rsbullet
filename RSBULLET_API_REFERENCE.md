@@ -1,7 +1,5 @@
 # rsbullet / PyBullet API 对照表
 
-> 说明：本表基于 `rsbullet-core/src/client.rs`、`rsbullet-sys/bullet3/examples/pybullet/pybullet.c` 以及 `REPORT-2025-10-10.md`。
->
 > - **Rust API 名称**：`PhysicsClient` 及关联模块中暴露的 Rust 方法。
 > - **PyBullet API 名称**：PyBullet 文档/脚本使用的调用标识（非 C 层函数名）。
 > - **状态**：Implemented、Pending、Optional（仅在编译选项满足、或为遗留/低优先级时实现）。
@@ -148,25 +146,26 @@
 | Rust API 名称 | PyBullet API 名称 | 状态 | 说明 | 其他 |
 | --- | --- | --- | --- | --- |
 | — | `renderImage` | Pending | 渲染图像到缓冲区。 | 需图像缓冲拷贝，尚未实现。 |
-| — | `getCameraImage` | Pending | 获取摄像机图像。 | 计划集成。 |
-| — | `computeViewMatrix` | Pending | 视图矩阵计算。 | 将以 `nalgebra` 提供。 |
-| — | `computeViewMatrixFromYawPitchRoll` | Pending | 视图矩阵辅助。 | — |
-| — | `computeProjectionMatrix` | Pending | 投影矩阵计算。 | — |
-| — | `computeProjectionMatrixFOV` | Pending | 基于视场的投影矩阵。 | — |
-| — | `addUserDebugLine` | Pending | 调试线段渲染。 | — |
-| — | `addUserDebugPoints` | Pending | 调试点云渲染。 | — |
-| — | `addUserDebugText` | Pending | 调试文本渲染。 | — |
-| — | `addUserDebugParameter` | Pending | 调试 GUI 控制。 | — |
-| — | `readUserDebugParameter` | Pending | 读取调试 GUI 值。 | — |
-| — | `removeUserDebugItem` | Pending | 删除调试项。 | — |
-| — | `removeAllUserDebugItems` | Pending | 清空调试项。 | — |
-| — | `removeAllUserParameters` | Pending | 清空调试 GUI。 | — |
-| — | `setDebugObjectColor` | Pending | 设定调试颜色。 | — |
-| — | `getDebugVisualizerCamera` | Pending | 读取调试相机参数。 | — |
-| — | `configureDebugVisualizer` | Pending | 配置调试显示器。 | — |
-| — | `resetDebugVisualizerCamera` | Pending | 重置调试相机。 | — |
-| — | `getVisualShapeData` | Pending | 查询视觉形状数据。 | — |
-| — | `getCollisionShapeData` | Pending | 查询碰撞形状数据。 | — |
+| `PhysicsClient::get_camera_image` | `getCameraImage` | Implemented | 获取摄像机图像。 | Rust 返回 `CameraImage` 结构体。 |
+| — | `isNumpyEnabled` | Pending | 返回 numpy 支持状态。 | C 层简单标志，尚未暴露。 |
+| `PhysicsClient::compute_view_matrix` | `computeViewMatrix` | Implemented | 视图矩阵计算。 | 直接调用 Bullet FFI。 |
+| `PhysicsClient::compute_view_matrix_from_yaw_pitch_roll` | `computeViewMatrixFromYawPitchRoll` | Implemented | 视图矩阵辅助。 | — |
+| `PhysicsClient::compute_projection_matrix` | `computeProjectionMatrix` | Implemented | 投影矩阵计算。 | — |
+| `PhysicsClient::compute_projection_matrix_fov` | `computeProjectionMatrixFOV` | Implemented | 基于视场的投影矩阵。 | — |
+| `PhysicsClient::add_user_debug_line` | `addUserDebugLine` | Implemented | 调试线段渲染。 | 支持父对象/替换 ID。 |
+| `PhysicsClient::add_user_debug_points` | `addUserDebugPoints` | Implemented | 调试点云渲染。 | 需颜色与位置数量匹配。 |
+| `PhysicsClient::add_user_debug_text` | `addUserDebugText` | Implemented | 调试文本渲染。 | 支持朝向与父节点。 |
+| `PhysicsClient::add_user_debug_parameter` | `addUserDebugParameter` | Implemented | 调试 GUI 控制。 | 返回参数句柄。 |
+| `PhysicsClient::read_user_debug_parameter` | `readUserDebugParameter` | Implemented | 读取调试 GUI 值。 | 返回 `f64` 数值。 |
+| `PhysicsClient::remove_user_debug_item` | `removeUserDebugItem` | Implemented | 删除调试项。 | — |
+| `PhysicsClient::remove_all_user_debug_items` | `removeAllUserDebugItems` | Implemented | 清空调试项。 | — |
+| `PhysicsClient::remove_all_user_parameters` | `removeAllUserParameters` | Implemented | 清空调试 GUI。 | — |
+| `PhysicsClient::set_debug_object_color` | `setDebugObjectColor` | Implemented | 设定调试颜色。 | `None` 则恢复默认。 |
+| `PhysicsClient::get_debug_visualizer_camera` | `getDebugVisualizerCamera` | Implemented | 读取调试相机参数。 | 返回 `DebugVisualizerCamera` 结构体。 |
+| `PhysicsClient::configure_debug_visualizer` | `configureDebugVisualizer` | Implemented | 配置调试显示器。 | 支持光照/阴影选项。 |
+| `PhysicsClient::reset_debug_visualizer_camera` | `resetDebugVisualizerCamera` | Implemented | 重置调试相机。 | 校验距离非负。 |
+| `PhysicsClient::get_visual_shape_data` | `getVisualShapeData` | Implemented | 查询视觉形状数据。 | 返回 `Vec<VisualShapeData>`。 |
+| `PhysicsClient::get_collision_shape_data` | `getCollisionShapeData` | Implemented | 查询碰撞形状数据。 | 支持可选链接索引。 |
 
 ## Math & Transform Utilities
 
@@ -189,22 +188,15 @@
 
 | Rust API 名称 | PyBullet API 名称 | 状态 | 说明 | 其他 |
 | --- | --- | --- | --- | --- |
-| — | `getVREvents` | Pending | VR 事件读取。 | 需启用 VR 编译。 |
-| — | `setVRCameraState` | Pending | 设置 VR 相机。 | — |
-| — | `getKeyboardEvents` | Pending | 键盘事件读取。 | — |
-| — | `getMouseEvents` | Pending | 鼠标事件读取。 | — |
-| — | `startStateLogging` | Pending | 开始状态日志。 | 依赖回放框架。 |
-| — | `stopStateLogging` | Pending | 停止状态日志。 | — |
-| — | `loadPlugin` | Pending | 加载插件。 | 需插件 ABI 支持。 |
-| — | `unloadPlugin` | Pending | 卸载插件。 | — |
-| — | `executePluginCommand` | Pending | 执行插件命令。 | — |
-| — | `submitProfileTiming` | Pending | 提交性能分析标记。 | — |
-| — | `setTimeOut` | Pending | 设置通信超时。 | Python 中默认值为秒。 |
-| — | `getAPIVersion` | Pending | 返回 API 魔数。 | Python 返回 `SHARED_MEMORY_MAGIC_NUMBER`。 |
-
-## 额外说明
-
-1. **错误处理差异**：Rust 所有公开方法返回 `Result<T, BulletError>`，确保错误必须显式处理；Python 使用异常或返回 `None`。
-2. **参数封装**：Rust 倾向使用结构体（如 `UrdfOptions`、`JointMotorControl2Options`）以规避 Python 中位置/关键字混搭的错误。
-3. **可选功能**：软体、调试可视化、VR/输入等功能依赖 Bullet 构建宏（如 `BT_ENABLE_ENET`、`BT_ENABLE_VHACD`）。Rust 将依据需求和平台支持逐步开放。
-4. **未来工作**：优先补充 Debug & Visualization 以及 Math Helpers，以提升可视化调试能力，并对齐 PyBullet 的便捷数学接口。
+| `PhysicsClient::get_vr_events` | `getVREvents` | Implemented | VR 事件读取。 | 支持设备过滤及附加轴。 |
+| `PhysicsClient::set_vr_camera_state` | `setVRCameraState` | Implemented | 设置 VR 相机。 | 可跟踪对象与标志。 |
+| `PhysicsClient::get_keyboard_events` | `getKeyboardEvents` | Implemented | 键盘事件读取。 | 返回按键事件列表。 |
+| `PhysicsClient::get_mouse_events` | `getMouseEvents` | Implemented | 鼠标事件读取。 | 返回按键与移动数据。 |
+| `PhysicsClient::start_state_logging` | `startStateLogging` | Implemented | 开始状态日志。 | 返回日志 ID，支持过滤。 |
+| `PhysicsClient::stop_state_logging` | `stopStateLogging` | Implemented | 停止状态日志。 | 传入无效 ID 时忽略。 |
+| `PhysicsClient::load_plugin` | `loadPlugin` | Implemented | 加载插件。 | 支持后缀参数。 |
+| `PhysicsClient::unload_plugin` | `unloadPlugin` | Implemented | 卸载插件。 | — |
+| `PhysicsClient::execute_plugin_command` | `executePluginCommand` | Implemented | 执行插件命令。 | 返回状态与可选数据。 |
+| `PhysicsClient::submit_profile_timing` | `submitProfileTiming` | Implemented | 提交性能分析标记。 | `None` 表示结束区段。 |
+| `PhysicsClient::set_time_out` | `setTimeOut` | Implemented | 设置通信超时。 | 校验非负秒数。 |
+| `PhysicsClient::get_api_version` | `getAPIVersion` | Implemented | 返回 API 魔数。 | 对应 `SHARED_MEMORY_MAGIC_NUMBER`。 |

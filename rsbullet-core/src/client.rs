@@ -3768,26 +3768,26 @@ impl PhysicsClient {
 /// | API | Status | Notes |
 /// | --- | --- | --- |
 /// | renderImage | Pending | Obsolete; low priority |
-/// | getCameraImage | Pending | High effort (buffers) |
+/// | getCameraImage | Implemented | High effort (buffers) |
 /// | isNumpyEnabled | Pending | Simple flag query |
-/// | computeViewMatrix | Pending | Math helper |
-/// | computeViewMatrixFromYawPitchRoll | Pending | Math helper |
-/// | computeProjectionMatrix | Pending | Math helper |
-/// | computeProjectionMatrixFOV | Pending | Math helper |
-/// | addUserDebugLine | Pending | Debug draw |
-/// | addUserDebugPoints | Pending | Debug draw |
-/// | addUserDebugText | Pending | Debug draw |
-/// | addUserDebugParameter | Pending | GUI slider/button |
-/// | readUserDebugParameter | Pending | GUI feedback |
-/// | removeUserDebugItem | Pending | Debug cleanup |
-/// | removeAllUserDebugItems | Pending | Debug cleanup |
-/// | removeAllUserParameters | Pending | Debug cleanup |
-/// | setDebugObjectColor | Pending | Debug override |
-/// | getDebugVisualizerCamera | Pending | Visualizer query |
-/// | configureDebugVisualizer | Pending | Visualizer toggle |
-/// | resetDebugVisualizerCamera | Pending | Visualizer camera |
-/// | getVisualShapeData | Pending | Visual query |
-/// | getCollisionShapeData | Pending | Collision query |
+/// | computeViewMatrix | Implemented | Math helper |
+/// | computeViewMatrixFromYawPitchRoll | Implemented | Math helper |
+/// | computeProjectionMatrix | Implemented | Math helper |
+/// | computeProjectionMatrixFOV | Implemented | Math helper |
+/// | addUserDebugLine | Implemented | Debug draw |
+/// | addUserDebugPoints | Implemented | Debug draw |
+/// | addUserDebugText | Implemented | Debug draw |
+/// | addUserDebugParameter | Implemented | GUI slider/button |
+/// | readUserDebugParameter | Implemented | GUI feedback |
+/// | removeUserDebugItem | Implemented | Debug cleanup |
+/// | removeAllUserDebugItems | Implemented | Debug cleanup |
+/// | removeAllUserParameters | Implemented | Debug cleanup |
+/// | setDebugObjectColor | Implemented | Debug override |
+/// | getDebugVisualizerCamera | Implemented | Visualizer query |
+/// | configureDebugVisualizer | Implemented | Visualizer toggle |
+/// | resetDebugVisualizerCamera | Implemented | Visualizer camera |
+/// | getVisualShapeData | Implemented | Visual query |
+/// | getCollisionShapeData | Implemented | Collision query |
 impl PhysicsClient {
     pub fn get_camera_image(&mut self, request: &CameraImageRequest) -> BulletResult<CameraImage> {
         if request.width <= 0 || request.height <= 0 {
@@ -4311,18 +4311,18 @@ impl PhysicsClient {
 ///
 /// | API | Status | Notes |
 /// | --- | --- | --- |
-/// | getVREvents | Pending | VR input |
-/// | setVRCameraState | Pending | VR camera |
-/// | getKeyboardEvents | Pending | Input polling |
-/// | getMouseEvents | Pending | Input polling |
-/// | startStateLogging | Pending | Logging |
-/// | stopStateLogging | Pending | Logging |
-/// | loadPlugin | Pending | Plugin system |
-/// | unloadPlugin | Pending | Plugin system |
-/// | executePluginCommand | Pending | Plugin system |
-/// | submitProfileTiming | Pending | Profiling |
-/// | setTimeOut | Pending | Client timeout |
-/// | getAPIVersion | Pending | Static constant |
+/// | getVREvents | Implemented | VR input |
+/// | setVRCameraState | Implemented | VR camera |
+/// | getKeyboardEvents | Implemented | Input polling |
+/// | getMouseEvents | Implemented | Input polling |
+/// | startStateLogging | Implemented | Logging |
+/// | stopStateLogging | Implemented | Logging |
+/// | loadPlugin | Implemented | Plugin system |
+/// | unloadPlugin | Implemented | Plugin system |
+/// | executePluginCommand | Implemented | Plugin system |
+/// | submitProfileTiming | Implemented | Profiling |
+/// | setTimeOut | Implemented | Client timeout |
+/// | getAPIVersion | Implemented | Static constant |
 impl PhysicsClient {
     pub fn get_vr_events(
         &mut self,

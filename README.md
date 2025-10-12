@@ -2,6 +2,10 @@
 
 This project is a fork of the [rubullet](https://github.com/neachdainn/rubullet) project. As the original repository has not been updated for over five years, further maintenance, updates, and customization requirements are being carried out here. The readme file of the original warehouse can be found below.
 
+Compared to the 100 APIs implemented in the original library, we have additionally implemented all the APIs in pybullet 3.2.7. This enables you to smoothly migrate from pybullet to rsbullet, simply by changing the API names to snake_case. you can read API documentation in the [RSBULLET_API_REFERENCE.md](./RSBULLET_API_REFERENCE.md).
+
+We have prepared a series of examples which can be referred to [examples](./rsbullet/examples).
+
 ---
 
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/neachdainn/rubullet/Rust)
