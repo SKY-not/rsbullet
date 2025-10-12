@@ -8,3 +8,5 @@ pub use client::{
     get_num_physics_clients,
 };
 pub use error::{BulletError, BulletResult};
+pub use mode::Mode;
+pub use types::*;

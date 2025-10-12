@@ -28,7 +28,7 @@ rsbullet_sys = {version = "0.1.0", path = "../rsbullet-sys" }
 nalgebra = { version = "0.34.1" }
 
 [features]
-default = ["dart","physx","mujoco","grpc","enet"]
+default = []
 dart = ["rsbullet-core/dart"]
 physx = ["rsbullet-core/physx"]
 mujoco = ["rsbullet-core/mujoco"]
