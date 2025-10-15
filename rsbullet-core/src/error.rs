@@ -9,9 +9,16 @@ pub enum BulletError {
     /// Bullet reported that the physics server is not responsive.
     ServerUnavailable(&'static str),
     /// The command completed with an unexpected status code.
-    UnexpectedStatus { expected: i32, actual: i32 },
+    UnexpectedStatus {
+        expected: i32,
+        actual: i32,
+    },
     /// A low-level FFI command returned an error code.
-    CommandFailed { message: &'static str, code: i32 },
+    CommandFailed {
+        message: &'static str,
+        code: i32,
+    },
+    UnknownType(&'static str),
     /// Converting Rust strings into C strings failed.
     CString(NulError),
 }
@@ -28,6 +35,7 @@ impl Display for BulletError {
             BulletError::CommandFailed { message, code } => {
                 write!(f, "{message} (code={code})")
             }
+            BulletError::UnknownType(msg) => write!(f, "{msg}"),
             BulletError::CString(err) => err.fmt(f),
         }
     }

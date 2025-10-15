@@ -10,7 +10,7 @@ fn main() {
         .expect("failed to register Bullet data path");
 
     client
-        .load_urdf("r2d2.urdf", None)
+        .load_urdf("r2d2.urdf", None::<()>)
         .expect("failed to load URDF");
 
     sleep(Duration::from_secs(10));

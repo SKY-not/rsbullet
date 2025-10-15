@@ -5,10 +5,10 @@ use std::{
     ffi::{CStr, CString},
     mem::MaybeUninit,
     os::raw::c_char,
-    path::Path,
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr, slice,
     sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
 };
 
 use nalgebra as na;
@@ -309,7 +309,7 @@ impl PhysicsClient {
     /// Performs all the actions in a single forward dynamics simulation step such as collision
     /// detection, constraint solving, and integration.
     /// TODO: Return analytics data?
-    pub fn step_simulation(&mut self) -> Result<(), BulletError> {
+    pub fn step_simulation(&mut self) -> BulletResult<()> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitStepSimulationCommand(self.handle) };
         self.submit_simple_command(
@@ -333,13 +333,2080 @@ impl PhysicsClient {
     /// # Arguments
     /// * `gravity` - a gravity vector. Can be a \[f64;3\]-array or anything else that can be
     ///   converted into [f64; 3].
-    pub fn set_gravity(&mut self, grav: impl Into<[f64; 3]>) -> BulletResult<()> {
+    pub fn set_gravity(&mut self, grav: impl Into<[f64; 3]>) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let grav = grav.into();
         let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
         unsafe {
             ffi::b3PhysicsParamSetGravity(command, grav[0], grav[1], grav[2]);
         }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    /// Warning: in many cases it is best to leave the timeStep to default, which is 240Hz.
+    /// Several parameters are tuned with this value in mind. For example the number of solver
+    /// iterations and the error reduction parameters (erp) for contact, friction and non-contact
+    /// joints are related to the time step. If you change the time step, you may need to re-tune
+    /// those values accordingly, especially the erp values.
+    ///
+    /// You can set the physics engine timestep that is used when calling
+    /// [`step_simulation`](`Self::step_simulation()`).
+    /// It is best to only call this method at the start of a simulation.
+    /// Don't change this time step regularly.
+    pub fn set_time_step(&mut self, time_step: Duration) -> BulletResult<&mut Self> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
+        unsafe {
+            ffi::b3PhysicsParamSetTimeStep(command, time_step.as_secs_f64());
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    /// Update the global default contact ERP (error reduction parameter).
+    pub fn set_default_contact_erp(&mut self, default_contact_erp: f64) -> BulletResult<&mut Self> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
+        unsafe {
+            ffi::b3PhysicsParamSetDefaultContactERP(command, default_contact_erp);
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    /// By default, the physics server will not step the simulation, unless you explicitly send a
+    /// [`step_simulation`](`Self::step_simulation()`) command.
+    /// This way you can maintain control determinism of the simulation
+    /// It is possible to run the simulation in real-time by letting the physics server
+    /// automatically step the simulation according to its real-time-clock (RTC) using the
+    /// set_real_time_simulation command. If you enable the real-time simulation,
+    /// you don't need to call [`step_simulation`](`Self::step_simulation()`).
+    ///
+    /// Note that set_real_time_simulation has no effect in
+    /// [`Direct mode`](`crate::mode::Mode::Direct`) :
+    /// in [`Direct mode`](`crate::mode::Mode::Direct`) mode the physics
+    /// server and client happen in the same thread and you trigger every command.
+    /// In [`Gui mode`](`crate::mode::Mode::Gui`) and in Virtual Reality mode, and TCP/UDP mode,
+    /// the physics server runs in a separate thread from the client (RuBullet),
+    /// and set_real_time_simulation allows the physics server thread
+    /// to add additional calls to  [`step_simulation`](`Self::step_simulation()`).
+    ///
+    /// # Arguments
+    /// * `enable_real_time_simulation` - activates or deactivates real-time simulation
+    pub fn set_real_time_simulation(&mut self, enable: bool) -> BulletResult<&mut Self> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
+        unsafe {
+            ffi::b3PhysicsParamSetRealTimeSimulation(command, enable as i32);
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    /// Apply a batch of physics engine parameters, mirroring PyBullet's `setPhysicsEngineParameter`.
+    pub fn set_physics_engine_parameter(
+        &mut self,
+        update: &PhysicsEngineParametersUpdate,
+    ) -> BulletResult<&mut Self> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
+        Self::apply_physics_engine_update(command, update);
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    /// Query the current physics simulation parameters from the server.
+    pub fn get_physics_engine_parameters(&mut self) -> BulletResult<PhysicsEngineParameters> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRequestPhysicsParamCommand(self.handle) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_PHYSICS_SIMULATION_PARAMETERS_COMPLETED,
+        )?;
+
+        let mut raw = MaybeUninit::<ffi::b3PhysicsSimulationParameters>::uninit();
+        let result =
+            unsafe { ffi::b3GetStatusPhysicsSimulationParameters(status.handle, raw.as_mut_ptr()) };
+        if result == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Failed to fetch physics simulation parameters",
+                code: result,
+            });
+        }
+        unsafe { raw.assume_init() }.try_into()
+    }
+
+    /// Set internal simulation flags (expert-level API).
+    pub fn set_internal_sim_flags(&mut self, flags: i32) -> BulletResult<&mut Self> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
+        unsafe {
+            ffi::b3PhysicsParamSetInternalSimFlags(command, flags);
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(self)
+    }
+}
+
+// ! =====================================================================================================================================
+// ### World Authoring & Persistence
+//
+// | API | Status | Notes |
+// | --- | --- | --- |
+// | loadURDF | **Implemented** | Supports position/orientation/options |
+// | loadSDF | **Implemented** | Returns body list |
+// | loadSoftBody | Optional | Requires soft-body build support |
+// | createSoftBodyAnchor | Optional | Soft-body specific |
+// | loadBullet | **Implemented** | World snapshot load |
+// | saveBullet | **Implemented** | World snapshot save |
+// | restoreState | **Implemented** | In-memory state restore |
+// | saveState | **Implemented** | In-memory state save |
+// | removeState | **Implemented** | Pair with saveState |
+// | loadMJCF | **Implemented** | Returns body list |
+// | saveWorld | **Implemented** | Script export helper |
+// | setAdditionalSearchPath | **Implemented** | Search path registry |
+// | vhacd | Optional | Requires VHACD build flag |
+
+impl PhysicsClient {
+    /// Sends a command to the physics server to load a physics model from a Unified Robot
+    /// Description Format (URDF) model.
+    ///
+    /// # Arguments
+    /// * `file` - a relative or absolute path to the URDF file on the file system of the physics server
+    /// * `options` - use additional options like `global_scaling` and `use_maximal_coordinates` for
+    ///   loading the URDF-file. See [`UrdfOptions`](`crate::types::UrdfOptions`).
+    /// # Example
+    /// ```rust
+    /// use rsbullet_core::*;
+    /// fn main() -> BulletResult<&mut Self> {
+    ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
+    ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///     let cube = physics_client.load_urdf("cube.urdf", None)?;
+    ///     assert_eq!("baseLink", physics_client.get_body_info(cube)?.base_name);
+    ///     for i in 0..10 {
+    ///         let _cube = physics_client.load_urdf(
+    ///             "cube.urdf",
+    ///             None,
+    ///         )?;
+    ///     }
+    ///     assert_eq!(11, physics_client.get_num_bodies());
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn load_urdf(
+        &mut self,
+        file: impl AsRef<Path>,
+        options: Option<impl Into<UrdfOptions>>,
+    ) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let file_c = Self::path_to_cstring(file.as_ref())?;
+        let command = unsafe { ffi::b3LoadUrdfCommandInit(self.handle, file_c.as_ptr()) };
+
+        if let Some(options) = options {
+            let options = options.into();
+
+            if let Some(flags) = options.flags {
+                unsafe {
+                    ffi::b3LoadUrdfCommandSetFlags(command, flags.bits());
+                }
+            }
+
+            if let Some(base) = options.base.as_ref() {
+                let ([x, y, z], [ox, oy, oz, ow]) = isometry_to_raw_parts(base);
+                unsafe {
+                    ffi::b3LoadUrdfCommandSetStartPosition(command, x, y, z);
+                    ffi::b3LoadUrdfCommandSetStartOrientation(command, ox, oy, oz, ow);
+                }
+            }
+
+            if let Some(use_maximal) = options.use_maximal_coordinates {
+                unsafe {
+                    ffi::b3LoadUrdfCommandSetUseMultiBody(command, (!use_maximal) as i32);
+                }
+            }
+
+            if options.use_fixed_base {
+                unsafe {
+                    ffi::b3LoadUrdfCommandSetUseFixedBase(command, 1);
+                }
+            }
+
+            if let Some(global_scaling) = options.global_scaling {
+                unsafe {
+                    ffi::b3LoadUrdfCommandSetGlobalScaling(command, global_scaling);
+                }
+            }
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_URDF_LOADING_COMPLETED,
+        )?;
+
+        let body_id = unsafe { ffi::b3GetStatusBodyIndex(status.handle) };
+        Ok(body_id)
+    }
+
+    /// Sends a command to the physics server to load a physics model from
+    /// a Simulation Description Format (SDF) model.
+    /// # Arguments
+    /// * `file` - a relative or absolute path to the SDF file on the file system of the physics server.
+    /// * `options` -  use additional options like `global_scaling` and `use_maximal_coordinates` for
+    ///   loading the SDF-file. See [`SdfOptions`](`crate::types::SdfOptions`).
+    ///    
+    /// # Return
+    /// Returns a list of unique body id's
+    ///
+    /// # Example
+    /// ```rust
+    /// use rsbullet_core::*;
+    /// fn main() -> BulletResult<&mut Self> {
+    ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
+    ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///     let cubes = physics_client.load_sdf("two_cubes.sdf", None)?;
+    ///     assert_eq!(3, cubes.len()); // 2 cubes + 1 plane
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn load_sdf(
+        &mut self,
+        file: impl AsRef<Path>,
+        options: impl Into<Option<SdfOptions>>,
+    ) -> BulletResult<Vec<i32>> {
+        self.ensure_can_submit()?;
+        let file_c = Self::path_to_cstring(file.as_ref())?;
+        let command = unsafe { ffi::b3LoadSdfCommandInit(self.handle, file_c.as_ptr()) };
+
+        let options = options.into().unwrap_or_default();
+
+        if let Some(use_maximal) = options.use_maximal_coordinates {
+            unsafe {
+                ffi::b3LoadSdfCommandSetUseMultiBody(command, (!use_maximal) as i32);
+            }
+        }
+
+        if let Some(global_scaling) = options.global_scaling {
+            unsafe {
+                ffi::b3LoadSdfCommandSetUseGlobalScaling(command, global_scaling);
+            }
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_SDF_LOADING_COMPLETED,
+        )?;
+
+        Self::collect_body_indices(status.handle)
+    }
+
+    /// Sends a command to the physics server to load a physics model from
+    /// a MuJoCo model.
+    /// # Arguments
+    /// * `file` - a relative or absolute path to the MuJoCo file on the file system of the physics server.
+    /// * `flags` -  Flags for loading the model. Set to None if you do not whish to provide any.
+    ///
+    /// # Return
+    /// Returns a list of unique body id's
+    ///
+    /// # Example
+    /// ```rust
+    /// use rsbullet_core::*;
+    /// fn main() -> BulletResult<&mut Self> {
+    ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
+    ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///     let stadium = physics_client.load_mjcf("mjcf/hello_mjcf.xml", None)?;
+    ///     assert_eq!(2, stadium.len()); // 1 cube + 1 plane
+    ///
+    ///     let plane = physics_client.load_mjcf("mjcf/ground_plane.xml", LoadModelFlags::URDF_ENABLE_CACHED_GRAPHICS_SHAPES)?;
+    ///     assert_eq!(1, plane.len());
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn load_mjcf(
+        &mut self,
+        file: impl AsRef<Path>,
+        options: impl Into<Option<MjcfOptions>>,
+    ) -> BulletResult<Vec<i32>> {
+        self.ensure_can_submit()?;
+        let file_c = Self::path_to_cstring(file.as_ref())?;
+        let command = unsafe { ffi::b3LoadMJCFCommandInit(self.handle, file_c.as_ptr()) };
+
+        let options = options.into().unwrap_or_default();
+
+        if let Some(flags) = options.flags {
+            unsafe {
+                ffi::b3LoadMJCFCommandSetFlags(command, flags.bits());
+            }
+        }
+
+        if let Some(use_multi_body) = options.use_multi_body {
+            unsafe {
+                ffi::b3LoadMJCFCommandSetUseMultiBody(command, use_multi_body as i32);
+            }
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_MJCF_LOADING_COMPLETED,
+        )?;
+
+        Self::collect_body_indices(status.handle)
+    }
+
+    /// Loads Bodies from a `.bullet` file. These can be created with [`save_bullet`](`Self::save_bullet`).
+    ///
+    /// Returns a list of BodyId's.
+    /// # Arguments
+    /// * `bullet_filename` - location of the `.bullet`
+    /// # Example
+    /// ```rust
+    ///# use rsbullet::*;
+    ///#
+    ///# fn main() -> BulletResult<&mut Self> {
+    ///#     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
+    ///#     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///     let points = physics_client.load_bullet("spider.bullet")?;
+    ///#     Ok(())
+    ///# }
+    /// ```
+    /// See also `save_and_restore.rs` example.
+    pub fn load_bullet(&mut self, file: impl AsRef<Path>) -> BulletResult<Vec<i32>> {
+        self.ensure_can_submit()?;
+        let file_c = Self::path_to_cstring(file.as_ref())?;
+        let command = unsafe { ffi::b3LoadBulletCommandInit(self.handle, file_c.as_ptr()) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_BULLET_LOADING_COMPLETED,
+        )?;
+
+        Self::collect_body_indices(status.handle)
+    }
+    /// Saves all bodies and the current state into a `.bullet` file which can then be read by
+    /// [`load_bullet`](`Self::load_bullet`) or [`restore_state_from_file`](`Self::restore_state_from_file`).
+    /// See also `save_and_restore.rs` example.
+    pub fn save_bullet(&mut self, file: impl AsRef<Path>) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let file_c = Self::path_to_cstring(file.as_ref())?;
+        let command = unsafe { ffi::b3SaveBulletCommandInit(self.handle, file_c.as_ptr()) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_BULLET_SAVING_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn save_world(&mut self, file: impl AsRef<Path>) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let file_c = Self::path_to_cstring(file.as_ref())?;
+        let command = unsafe { ffi::b3SaveWorldCommandInit(self.handle, file_c.as_ptr()) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_SAVE_WORLD_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    /// restores a state from memory using a state id which was created with [`save_state`](`Self::save_state`).
+    /// See `save_and_restore.rs` example.
+    pub fn restore_state(
+        &mut self,
+        state_id: Option<i32>,
+        file: Option<impl AsRef<Path>>,
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3LoadStateCommandInit(self.handle) };
+
+        if let Some(state_id) = state_id {
+            unsafe {
+                ffi::b3LoadStateSetStateId(command, state_id);
+            }
+        }
+
+        if let Some(ref file) = file {
+            let file_c = Self::path_to_cstring(file.as_ref())?;
+            unsafe { ffi::b3LoadStateSetFileName(command, file_c.as_ptr()) };
+        }
+
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_RESTORE_STATE_COMPLETED,
+        )?;
+        Ok(())
+    }
+    /// Saves the current state in memory and returns a StateId which can be used by [`restore_state`](`Self::restore_state`)
+    /// to restore this state.  Use [`save_bullet`](`Self::save_bullet`) if you want to save a state
+    /// to a file.
+    /// See `save_and_restore.rs` example.
+    pub fn save_state(&mut self) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3SaveStateCommandInit(self.handle) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_SAVE_STATE_COMPLETED,
+        )?;
+
+        let state_id = unsafe { ffi::b3GetStatusGetStateId(status.handle) };
+        Ok(state_id)
+    }
+    /// Removes a state from memory.
+    pub fn remove_state(&mut self, state_id: i32) -> BulletResult<()> {
+        if state_id < 0 {
+            return Ok(());
+        }
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRemoveStateCommand(self.handle, state_id) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_STATE_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn set_default_search_path(&mut self) -> BulletResult<&mut Self> {
+        self.set_additional_search_path(Self::bullet_data_path())
+    }
+
+    pub fn set_additional_search_path(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> BulletResult<&mut Self> {
+        self.ensure_can_submit()?;
+        let path_c = Self::path_to_cstring(path.as_ref())?;
+        let command = unsafe { ffi::b3SetAdditionalSearchPath(self.handle, path_c.as_ptr()) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    pub fn bullet_data_path() -> PathBuf {
+        {
+            #[cfg(target_os = "windows")]
+            {
+                env::var_os("LOCALAPPDATA")
+                    .or_else(|| env::var_os("USERPROFILE"))
+                    .map(PathBuf::from)
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                use std::path::PathBuf;
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join("Library").join("Application Support"))
+            }
+
+            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+            {
+                use std::path::PathBuf;
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".local").join("share"))
+            }
+        }
+        .map(|path| path.join("bullet"))
+        .unwrap()
+    }
+}
+
+/// ! =====================================================================================================================================
+/// ### Asset Creation & Mutation
+///
+/// | API | Status | Notes |
+/// | --- | --- | --- |
+/// | createCollisionShape | **Implemented** | Supports primitive/mesh geometry |
+/// | createCollisionShapeArray | **Implemented** | Compound shape builder |
+/// | removeCollisionShape | **Implemented** | Clean-up helper |
+/// | getMeshData | Pending | Mesh inspection |
+/// | getTetraMeshData | Pending | Soft-body mesh |
+/// | resetMeshData | Optional | Deformable specific |
+/// | createVisualShape | **Implemented** | Visual geometry authoring |
+/// | createVisualShapeArray | **Implemented** | Bulk visual authoring |
+/// | createMultiBody | **Implemented** | Procedural multibody build |
+/// | createConstraint | **Implemented** | Constraint authoring |
+/// | changeConstraint | **Implemented** | Constraint mutation |
+/// | removeConstraint | **Implemented** | Constraint teardown |
+/// | enableJointForceTorqueSensor | **Implemented** | Sensor toggle |
+/// | removeBody | **Implemented** | Body teardown |
+/// | getNumConstraints | **Implemented** | Constraint enumeration |
+/// | getConstraintInfo | **Implemented** | Constraint query |
+/// | getConstraintState | **Implemented** | Constraint forces |
+/// | getConstraintUniqueId | **Implemented** | Constraint enumeration |
+/// | changeVisualShape | **Implemented** | Visual mutation |
+/// | resetVisualShapeData | Pending | Legacy alias |
+/// | loadTexture | **Implemented** | Visual assets |
+/// | changeTexture | **Implemented** | Visual assets |
+impl PhysicsClient {
+    /// You can create a collision shape in a similar way to creating a visual shape. If you have
+    /// both you can use them to create objects in RuBullet.
+    /// # Arguments
+    /// * `shape` - A geometric body from which to create the shape
+    /// * `frame_offset` - offset of the shape with respect to the link frame. Default is no offset.
+    ///
+    /// # Return
+    /// Returns a unique [CollisionId](crate::CollisionId) which can then be used to create a body.
+    /// # See also
+    /// * [create_visual_shape](`Self::create_visual_shape`)
+    /// * [create_multi_body](`Self::create_multi_body`)
+    pub fn create_collision_shape(
+        &mut self,
+        geometry: CollisionGeometry<'_>,
+        options: impl Into<CollisionShapeOptions>,
+    ) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let mut scratch = GeometryScratch::default();
+        let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
+        let shape_index = self.add_collision_geometry(command, &geometry, &mut scratch)?;
+
+        let CollisionShapeOptions { transform, flags } = options.into();
+
+        if let Some(flags) = flags {
+            unsafe { ffi::b3CreateCollisionSetFlag(command, shape_index, flags) };
+        }
+
+        let (position, orientation) = isometry_to_raw_parts(&transform);
+        unsafe {
+            ffi::b3CreateCollisionShapeSetChildTransform(
+                command,
+                shape_index,
+                position.as_ptr(),
+                orientation.as_ptr(),
+            );
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_COLLISION_SHAPE_COMPLETED,
+        )?;
+        let shape_id = unsafe { ffi::b3GetStatusCollisionShapeUniqueId(status.handle) };
+        if shape_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to create collision shape",
+                code: shape_id,
+            });
+        }
+        Ok(shape_id)
+    }
+
+    pub fn create_collision_shape_array(
+        &mut self,
+        options: &'_ [(
+            CollisionGeometry<'_>,
+            impl Clone + Into<CollisionShapeOptions>,
+        )],
+    ) -> BulletResult<i32> {
+        if options.is_empty() {
+            return Err(BulletError::CommandFailed {
+                message: "Collision shape array requires at least one entry",
+                code: -1,
+            });
+        }
+
+        self.ensure_can_submit()?;
+        let mut scratch = GeometryScratch::default();
+        let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
+
+        for child in options {
+            let (geometry, option) = child;
+            let CollisionShapeOptions { transform, flags } = option.clone().into();
+            let index = self.add_collision_geometry(command, geometry, &mut scratch)?;
+            if let Some(flags) = flags {
+                unsafe { ffi::b3CreateCollisionSetFlag(command, index, flags) };
+            }
+            let (position, orientation) = isometry_to_raw_parts(&transform);
+            unsafe {
+                ffi::b3CreateCollisionShapeSetChildTransform(
+                    command,
+                    index,
+                    position.as_ptr(),
+                    orientation.as_ptr(),
+                );
+            }
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_COLLISION_SHAPE_COMPLETED,
+        )?;
+        let shape_id = unsafe { ffi::b3GetStatusCollisionShapeUniqueId(status.handle) };
+        if shape_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to create collision shape array",
+                code: shape_id,
+            });
+        }
+        Ok(shape_id)
+    }
+
+    pub fn remove_collision_shape(&mut self, collision_shape_id: i32) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command =
+            unsafe { ffi::b3InitRemoveCollisionShapeCommand(self.handle, collision_shape_id) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    /// You can create a visual shape in a similar way to creating a collision shape, with some
+    /// additional arguments to control the visual appearance, such as diffuse and specular color.
+    /// When you use the [GeometricVisualShape::MeshFile](`crate::GeometricVisualShape::MeshFile`)
+    /// type, you can point to a Wavefront OBJ file, and the
+    /// visual shape will parse some parameters from the material file (.mtl) and load a texture.
+    /// Note that large textures (above 1024x1024 pixels)
+    /// can slow down the loading and run-time performance.
+    ///
+    /// # Arguments
+    /// * `shape` - A geometric body from which to create the shape
+    /// * `options` - additional options to specify, like colors. See [VisualShapeOptions](crate::VisualShapeOptions)
+    ///   for details.
+    /// # Return
+    /// Returns a unique [VisualId](crate::VisualId) which can then be used to create a body.
+    /// # See also
+    /// * [create_collision_shape](`Self::create_collision_shape`)
+    /// * [create_multi_body](`Self::create_multi_body`)
+    pub fn create_visual_shape(
+        &mut self,
+        geometry: VisualGeometry<'_>,
+        options: impl Into<Option<VisualShapeOptions>>,
+    ) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let mut scratch = GeometryScratch::default();
+        let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
+
+        let shape_index = self.add_visual_geometry(command, &geometry, &mut scratch)?;
+
+        let options = options.into().unwrap_or_default();
+        if let Some(flags) = options.flags {
+            unsafe { ffi::b3CreateVisualSetFlag(command, shape_index, flags.bits()) };
+        }
+        let (position, orientation) = isometry_to_raw_parts(&options.transform);
+        unsafe {
+            ffi::b3CreateVisualShapeSetChildTransform(
+                command,
+                shape_index,
+                position.as_ptr(),
+                orientation.as_ptr(),
+            );
+        }
+        unsafe {
+            ffi::b3CreateVisualShapeSetRGBAColor(command, shape_index, options.rgba.as_ptr())
+        };
+        unsafe {
+            ffi::b3CreateVisualShapeSetSpecularColor(
+                command,
+                shape_index,
+                options.specular.as_ptr(),
+            )
+        };
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_VISUAL_SHAPE_COMPLETED,
+        )?;
+        let visual_id = unsafe { ffi::b3GetStatusVisualShapeUniqueId(status.handle) };
+        if visual_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to create visual shape",
+                code: visual_id,
+            });
+        }
+        Ok(visual_id)
+    }
+
+    pub fn create_visual_shape_array(
+        &mut self,
+        options: &'_ [(VisualGeometry, Option<VisualShapeOptions>)],
+    ) -> BulletResult<i32> {
+        if options.is_empty() {
+            return Err(BulletError::CommandFailed {
+                message: "Visual shape array requires at least one entry",
+                code: -1,
+            });
+        }
+
+        self.ensure_can_submit()?;
+        let mut scratch = GeometryScratch::default();
+        let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
+
+        for child in options {
+            let (geometry, options) = child;
+
+            let shape_index = self.add_visual_geometry(command, geometry, &mut scratch)?;
+
+            let options = options.unwrap_or_default();
+            if let Some(flags) = &options.flags {
+                unsafe { ffi::b3CreateVisualSetFlag(command, shape_index, flags.bits()) };
+            }
+            let (position, orientation) = isometry_to_raw_parts(&options.transform);
+            unsafe {
+                ffi::b3CreateVisualShapeSetChildTransform(
+                    command,
+                    shape_index,
+                    position.as_ptr(),
+                    orientation.as_ptr(),
+                );
+            }
+            unsafe {
+                ffi::b3CreateVisualShapeSetRGBAColor(command, shape_index, options.rgba.as_ptr())
+            };
+            unsafe {
+                ffi::b3CreateVisualShapeSetSpecularColor(
+                    command,
+                    shape_index,
+                    options.specular.as_ptr(),
+                )
+            };
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_VISUAL_SHAPE_COMPLETED,
+        )?;
+        let visual_id = unsafe { ffi::b3GetStatusVisualShapeUniqueId(status.handle) };
+        if visual_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to create visual shape array",
+                code: visual_id,
+            });
+        }
+        Ok(visual_id)
+    }
+
+    pub fn change_visual_shape(
+        &mut self,
+        body_unique_id: i32,
+        link_index: i32,
+        shape_index: i32,
+        options: &ChangeVisualShapeOptions,
+    ) -> BulletResult<&mut Self> {
+        self.ensure_can_submit()?;
+        let command = unsafe {
+            ffi::b3InitUpdateVisualShape2(self.handle, body_unique_id, link_index, shape_index)
+        };
+
+        if let Some(texture_id) = options.texture_unique_id {
+            unsafe { ffi::b3UpdateVisualShapeTexture(command, texture_id) };
+        }
+        if let Some(rgba) = options.rgba_color {
+            unsafe { ffi::b3UpdateVisualShapeRGBAColor(command, rgba.as_ptr()) };
+        }
+        if let Some(flags) = options.flags {
+            unsafe { ffi::b3UpdateVisualShapeFlags(command, flags) };
+        }
+        if let Some(specular) = options.specular_color {
+            unsafe { ffi::b3UpdateVisualShapeSpecularColor(command, specular.as_ptr()) };
+        }
+
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_VISUAL_SHAPE_UPDATE_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    pub fn create_multi_body(&mut self, options: &MultiBodyCreateOptions<'_>) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreateMultiBodyCommandInit(self.handle) };
+
+        let (base_position, base_orientation) = isometry_to_raw_parts(&options.base.pose);
+        let (inertial_position, inertial_orientation) =
+            isometry_to_raw_parts(&options.base.inertial_pose);
+
+        unsafe {
+            ffi::b3CreateMultiBodyBase(
+                command,
+                options.base.mass,
+                options.base.collision_shape,
+                options.base.visual_shape,
+                base_position.as_ptr(),
+                base_orientation.as_ptr(),
+                inertial_position.as_ptr(),
+                inertial_orientation.as_ptr(),
+            );
+        }
+
+        for link in options.links {
+            let parent_index = match link.parent_index {
+                Some(index) => Self::usize_to_i32(index)?,
+                None => -1,
+            };
+
+            let (link_position, link_orientation) = isometry_to_raw_parts(&link.parent_transform);
+            let (link_inertial_position, link_inertial_orientation) =
+                isometry_to_raw_parts(&link.inertial_transform);
+
+            unsafe {
+                ffi::b3CreateMultiBodyLink(
+                    command,
+                    link.mass,
+                    link.collision_shape as f64,
+                    link.visual_shape as f64,
+                    link_position.as_ptr(),
+                    link_orientation.as_ptr(),
+                    link_inertial_position.as_ptr(),
+                    link_inertial_orientation.as_ptr(),
+                    parent_index,
+                    link.joint_type,
+                    link.joint_axis.as_ptr(),
+                );
+            }
+        }
+
+        if let Some(flags) = options.flags {
+            unsafe { ffi::b3CreateMultiBodySetFlags(command, flags) };
+        }
+        if options.use_maximal_coordinates {
+            unsafe { ffi::b3CreateMultiBodyUseMaximalCoordinates(command) };
+        }
+        let mut _batch_storage: Option<Vec<f64>> = None;
+        if let Some(batch) = options.batch_transforms {
+            let mut flattened = Self::flatten_isometries(batch);
+            unsafe {
+                ffi::b3CreateMultiBodySetBatchPositions(
+                    self.handle,
+                    command,
+                    flattened.as_mut_ptr(),
+                    batch.len() as i32,
+                );
+            }
+            _batch_storage = Some(flattened);
+        }
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_MULTI_BODY_COMPLETED,
+        )?;
+        let body_id = unsafe { ffi::b3GetStatusBodyIndex(status.handle) };
+        if body_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to create multibody",
+                code: body_id,
+            });
+        }
+        Ok(body_id)
+    }
+
+    pub fn create_constraint(&mut self, options: &ConstraintCreateOptions) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let parent_link = match options.parent_link {
+            Some(index) => Self::usize_to_i32(index)?,
+            None => -1,
+        };
+        let child_link = match options.child_link {
+            Some(index) => Self::usize_to_i32(index)?,
+            None => -1,
+        };
+        let mut joint_info = ffi::b3JointInfo {
+            m_joint_type: options.joint_type as i32,
+            m_joint_axis: options.joint_axis,
+            m_joint_max_force: options.max_applied_force,
+            ..Default::default()
+        };
+        Self::write_transform_to_frame(&options.parent_frame, &mut joint_info.m_parent_frame);
+        Self::write_transform_to_frame(&options.child_frame, &mut joint_info.m_child_frame);
+
+        let command = unsafe {
+            ffi::b3InitCreateUserConstraintCommand(
+                self.handle,
+                options.parent_body,
+                parent_link,
+                options.child_body,
+                child_link,
+                &mut joint_info,
+            )
+        };
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_USER_CONSTRAINT_COMPLETED,
+        )?;
+        let constraint_id = unsafe { ffi::b3GetStatusUserConstraintUniqueId(status.handle) };
+        if constraint_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to create user constraint",
+                code: constraint_id,
+            });
+        }
+
+        let update = ConstraintUpdate {
+            max_force: Some(options.max_applied_force),
+            gear_ratio: options.gear_ratio,
+            gear_aux_link: options.gear_aux_link,
+            relative_position_target: options.relative_position_target,
+            erp: options.erp,
+            ..Default::default()
+        };
+
+        if Self::constraint_update_has_changes(&update) {
+            self.change_constraint(constraint_id, &update)?;
+        }
+
+        Ok(constraint_id)
+    }
+
+    pub fn change_constraint(
+        &mut self,
+        constraint_id: i32,
+        update: &ConstraintUpdate,
+    ) -> BulletResult<&mut Self> {
+        if !Self::constraint_update_has_changes(update) {
+            return Ok(self);
+        }
+
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitChangeUserConstraintCommand(self.handle, constraint_id) };
+
+        if let Some(frame) = update.child_frame.as_ref() {
+            let (pivot, orientation) = isometry_to_raw_parts(frame);
+            unsafe {
+                ffi::b3InitChangeUserConstraintSetPivotInB(command, pivot.as_ptr());
+                ffi::b3InitChangeUserConstraintSetFrameInB(command, orientation.as_ptr());
+            }
+        }
+        if let Some(force) = update.max_force {
+            unsafe { ffi::b3InitChangeUserConstraintSetMaxForce(command, force) };
+        }
+        if let Some(ratio) = update.gear_ratio {
+            unsafe { ffi::b3InitChangeUserConstraintSetGearRatio(command, ratio) };
+        }
+        if let Some(aux) = update.gear_aux_link {
+            let aux = Self::usize_to_i32(aux)?;
+            unsafe { ffi::b3InitChangeUserConstraintSetGearAuxLink(command, aux) };
+        }
+        if let Some(target) = update.relative_position_target {
+            unsafe { ffi::b3InitChangeUserConstraintSetRelativePositionTarget(command, target) };
+        }
+        if let Some(erp) = update.erp {
+            unsafe { ffi::b3InitChangeUserConstraintSetERP(command, erp) };
+        }
+
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CHANGE_USER_CONSTRAINT_COMPLETED,
+        )?;
+        Ok(self)
+    }
+
+    pub fn remove_constraint(&mut self, constraint_id: i32) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRemoveUserConstraintCommand(self.handle, constraint_id) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_USER_CONSTRAINT_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn enable_joint_force_torque_sensor(
+        &mut self,
+        body_unique_id: i32,
+        joint_index: i32,
+        enable: bool,
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreateSensorCommandInit(self.handle, body_unique_id) };
+        unsafe {
+            ffi::b3CreateSensorEnable6DofJointForceTorqueSensor(
+                command,
+                joint_index,
+                if enable { 1 } else { 0 },
+            );
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_body(&mut self, body_unique_id: i32) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRemoveBodyCommand(self.handle, body_unique_id) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_BODY_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn get_num_constraints(&self) -> i32 {
+        unsafe { ffi::b3GetNumUserConstraints(self.handle) }
+    }
+
+    pub fn get_constraint_info(&self, constraint_id: i32) -> BulletResult<ConstraintInfo> {
+        let mut raw = MaybeUninit::<ffi::b3UserConstraint>::uninit();
+        let success =
+            unsafe { ffi::b3GetUserConstraintInfo(self.handle, constraint_id, raw.as_mut_ptr()) };
+        if success == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Unable to query constraint info",
+                code: success,
+            });
+        }
+        let raw = unsafe { raw.assume_init() };
+        Ok(ConstraintInfo {
+            parent_body: raw.m_parentBodyIndex,
+            parent_link: raw.m_parentJointIndex,
+            child_body: raw.m_childBodyIndex,
+            child_link: raw.m_childJointIndex,
+            parent_frame: Self::read_frame_transform(&raw.m_parentFrame),
+            child_frame: Self::read_frame_transform(&raw.m_childFrame),
+            joint_axis: raw.m_jointAxis,
+            joint_type: raw.m_jointType,
+            max_applied_force: raw.m_maxAppliedForce,
+            constraint_unique_id: raw.m_userConstraintUniqueId,
+            gear_ratio: raw.m_gearRatio,
+            gear_aux_link: raw.m_gearAuxLink,
+            relative_position_target: raw.m_relativePositionTarget,
+            erp: raw.m_erp,
+        })
+    }
+
+    pub fn get_constraint_state(&mut self, constraint_id: i32) -> BulletResult<ConstraintState> {
+        self.ensure_can_submit()?;
+        let command =
+            unsafe { ffi::b3InitGetUserConstraintStateCommand(self.handle, constraint_id) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_USER_CONSTRAINT_REQUEST_STATE_COMPLETED,
+        )?;
+        let mut raw = MaybeUninit::<ffi::b3UserConstraintState>::uninit();
+        let success =
+            unsafe { ffi::b3GetStatusUserConstraintState(status.handle, raw.as_mut_ptr()) };
+        if success == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Unable to read constraint state",
+                code: success,
+            });
+        }
+        let raw = unsafe { raw.assume_init() };
+        Ok(ConstraintState {
+            applied_forces: raw.m_appliedConstraintForces,
+            dof_count: raw.m_numDofs,
+        })
+    }
+
+    pub fn get_constraint_unique_id(&self, index: i32) -> Option<i32> {
+        let id = unsafe { ffi::b3GetUserConstraintId(self.handle, index) };
+        if id < 0 { None } else { Some(id) }
+    }
+
+    pub fn load_texture(&mut self, filename: &str) -> BulletResult<TextureInfo> {
+        self.ensure_can_submit()?;
+        let filename_c = CString::new(filename)?;
+        let command = unsafe { ffi::b3InitLoadTexture(self.handle, filename_c.as_ptr()) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_LOAD_TEXTURE_COMPLETED,
+        )?;
+        let texture_id = unsafe { ffi::b3GetStatusTextureUniqueId(status.handle) };
+        if texture_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Bullet failed to load texture",
+                code: texture_id,
+            });
+        }
+        Ok(TextureInfo {
+            texture_unique_id: texture_id,
+        })
+    }
+
+    pub fn change_texture(&mut self, texture_id: i32, data: &TextureData<'_>) -> BulletResult<()> {
+        if data.width <= 0 || data.height <= 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Texture dimensions must be positive",
+                code: -1,
+            });
+        }
+
+        let expected_len = (data.width as usize)
+            .saturating_mul(data.height as usize)
+            .saturating_mul(3);
+        if expected_len != data.rgb_pixels.len() {
+            return Err(BulletError::CommandFailed {
+                message: "Texture data length mismatch",
+                code: data.rgb_pixels.len() as i32,
+            });
+        }
+
+        self.ensure_can_submit()?;
+        let command = unsafe {
+            ffi::b3CreateChangeTextureCommandInit(
+                self.handle,
+                texture_id,
+                data.width,
+                data.height,
+                data.rgb_pixels.as_ptr().cast(),
+            )
+        };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+}
+
+/// ! =====================================================================================================================================
+/// ### Bodies, Joints & Base State
+///
+/// | API | Status | Notes |
+/// | --- | --- | --- |
+/// | getNumBodies | **Implemented** | Enumeration helper |
+/// | getBodyUniqueId | **Implemented** | Enumeration helper |
+/// | getBodyInfo | **Implemented** | Names cached |
+/// | computeDofCount | **Implemented** | Useful with dynamics |
+/// | syncBodyInfo | **Implemented** | Multi-client support |
+/// | syncUserData | **Implemented** | Multi-client support |
+/// | addUserData | **Implemented** | User data authoring |
+/// | getUserData | **Implemented** | User data query |
+/// | removeUserData | **Implemented** | User data cleanup |
+/// | getUserDataId | **Implemented** | User data query |
+/// | getNumUserData | **Implemented** | User data query |
+/// | getUserDataInfo | **Implemented** | User data query |
+/// | getBasePositionAndOrientation | **Implemented** | Uses actual state request |
+/// | getAABB | **Implemented** | Contact bounds |
+/// | resetBasePositionAndOrientation | **Implemented** | World authoring priority |
+/// | unsupportedChangeScaling | Optional | Rudimentary scaling |
+/// | getBaseVelocity | **Implemented** | Uses actual state request |
+/// | resetBaseVelocity | **Implemented** | Dynamics priority |
+/// | getNumJoints | **Implemented** | Joint enumeration |
+/// | getJointInfo | **Implemented** | Joint metadata |
+/// | getJointState | **Implemented** | Single joint sensor |
+/// | getJointStates | **Implemented** | Batch sensor support |
+/// | getJointStateMultiDof | **Implemented** | Multi-DoF sensor |
+/// | getJointStatesMultiDof | **Implemented** | Multi-DoF batch |
+/// | getLinkState | **Implemented** | Forward kinematics |
+/// | getLinkStates | **Implemented** | Batch link state |
+/// | resetJointState | **Implemented** | World authoring priority |
+/// | resetJointStateMultiDof | **Implemented** | Multi-DoF reset |
+/// | resetJointStatesMultiDof | **Implemented** | Multi-DoF batch reset |
+impl PhysicsClient {
+    pub fn compute_dof_count(&self, body_unique_id: i32) -> i32 {
+        unsafe { ffi::b3ComputeDofCount(self.handle, body_unique_id) }
+    }
+
+    pub fn sync_body_info(&mut self) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitSyncBodyInfoCommand(self.handle) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_SYNC_BODY_INFO_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn sync_user_data(&mut self, body_unique_ids: Option<&[i32]>) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitSyncUserDataCommand(self.handle) };
+        if let Some(ids) = body_unique_ids {
+            for &id in ids {
+                unsafe {
+                    ffi::b3AddBodyToSyncUserDataRequest(command, id);
+                }
+            }
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_SYNC_USER_DATA_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn add_user_data(
+        &mut self,
+        body_unique_id: i32,
+        key: &str,
+        value: &str,
+        link_index: Option<i32>,
+        visual_shape_index: Option<i32>,
+    ) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let key_c = CString::new(key)?;
+        let value_c = CString::new(value)?;
+        let link_index = link_index.unwrap_or(-1);
+        let visual_shape_index = visual_shape_index.unwrap_or(-1);
+        let value_len = i32::try_from(value_c.as_bytes_with_nul().len()).map_err(|_| {
+            BulletError::CommandFailed {
+                message: "User data value is too long",
+                code: -1,
+            }
+        })?;
+
+        let command = unsafe {
+            ffi::b3InitAddUserDataCommand(
+                self.handle,
+                body_unique_id,
+                link_index,
+                visual_shape_index,
+                key_c.as_ptr(),
+                ffi::USER_DATA_VALUE_TYPE_STRING,
+                value_len,
+                value_c.as_ptr().cast(),
+            )
+        };
+
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_ADD_USER_DATA_COMPLETED,
+        )?;
+        let user_data_id = unsafe { ffi::b3GetUserDataIdFromStatus(status.handle) };
+        Ok(user_data_id)
+    }
+
+    pub fn remove_user_data(&mut self, user_data_id: i32) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRemoveUserDataCommand(self.handle, user_data_id) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_USER_DATA_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn get_user_data_id(
+        &self,
+        body_unique_id: i32,
+        key: &str,
+        link_index: Option<i32>,
+        visual_shape_index: Option<i32>,
+    ) -> BulletResult<Option<i32>> {
+        let key_c = CString::new(key)?;
+        let link_index = link_index.unwrap_or(-1);
+        let visual_shape_index = visual_shape_index.unwrap_or(-1);
+        let id = unsafe {
+            ffi::b3GetUserDataId(
+                self.handle,
+                body_unique_id,
+                link_index,
+                visual_shape_index,
+                key_c.as_ptr(),
+            )
+        };
+        if id < 0 { Ok(None) } else { Ok(Some(id)) }
+    }
+
+    pub fn get_user_data(&self, user_data_id: i32) -> BulletResult<Option<String>> {
+        let mut raw = MaybeUninit::<ffi::b3UserDataValue>::uninit();
+        let success = unsafe { ffi::b3GetUserData(self.handle, user_data_id, raw.as_mut_ptr()) };
+        if success == 0 {
+            return Ok(None);
+        }
+        let raw = unsafe { raw.assume_init() };
+        if raw.m_type != ffi::USER_DATA_VALUE_TYPE_STRING {
+            return Err(BulletError::CommandFailed {
+                message: "User data value has unsupported type",
+                code: raw.m_type,
+            });
+        }
+        if raw.m_data1.is_null() {
+            return Ok(None);
+        }
+        let value = unsafe { CStr::from_ptr(raw.m_data1) };
+        Ok(Some(value.to_string_lossy().into_owned()))
+    }
+
+    pub fn get_num_user_data(&self, body_unique_id: i32) -> BulletResult<i32> {
+        let count = unsafe { ffi::b3GetNumUserData(self.handle, body_unique_id) };
+        if count < 0 {
+            Err(BulletError::CommandFailed {
+                message: "Failed to query user data count",
+                code: count,
+            })
+        } else {
+            Ok(count)
+        }
+    }
+
+    pub fn get_user_data_info(
+        &self,
+        body_unique_id: i32,
+        user_data_index: i32,
+    ) -> BulletResult<UserDataInfo> {
+        let mut key_ptr: *const i8 = ptr::null();
+        let mut user_data_id = -1;
+        let mut link_index = -1;
+        let mut visual_shape_index = -1;
+        unsafe {
+            ffi::b3GetUserDataInfo(
+                self.handle,
+                body_unique_id,
+                user_data_index,
+                &mut key_ptr,
+                &mut user_data_id,
+                &mut link_index,
+                &mut visual_shape_index,
+            );
+        }
+
+        if key_ptr.is_null() || user_data_id == -1 {
+            return Err(BulletError::CommandFailed {
+                message: "Could not fetch user data info",
+                code: -1,
+            });
+        }
+
+        let key = unsafe { CStr::from_ptr(key_ptr) }
+            .to_string_lossy()
+            .into_owned();
+
+        Ok(UserDataInfo {
+            user_data_id,
+            key,
+            body_unique_id,
+            link_index,
+            visual_shape_index,
+        })
+    }
+
+    pub fn get_aabb(&mut self, body_unique_id: i32, link_index: i32) -> BulletResult<Aabb> {
+        if body_unique_id < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Invalid body id",
+                code: body_unique_id,
+            });
+        }
+        if link_index < -1 {
+            return Err(BulletError::CommandFailed {
+                message: "Invalid link index",
+                code: link_index,
+            });
+        }
+        self.ensure_can_submit()?;
+        let command =
+            unsafe { ffi::b3RequestCollisionInfoCommandInit(self.handle, body_unique_id) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_COLLISION_INFO_COMPLETED,
+        )?;
+
+        let mut aabb_min = [0.0; 3];
+        let mut aabb_max = [0.0; 3];
+        let success = unsafe {
+            ffi::b3GetStatusAABB(
+                status.handle,
+                link_index,
+                aabb_min.as_mut_ptr(),
+                aabb_max.as_mut_ptr(),
+            )
+        };
+        if success == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Failed to fetch AABB",
+                code: success,
+            });
+        }
+
+        Ok(Aabb {
+            min: aabb_min,
+            max: aabb_max,
+        })
+    }
+
+    pub fn reset_base_position_and_orientation(
+        &mut self,
+        body_unique_id: i32,
+        position: [f64; 3],
+        orientation: [f64; 4],
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
+        unsafe {
+            ffi::b3CreatePoseCommandSetBasePosition(command, position[0], position[1], position[2]);
+            ffi::b3CreatePoseCommandSetBaseOrientation(
+                command,
+                orientation[0],
+                orientation[1],
+                orientation[2],
+                orientation[3],
+            );
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn reset_base_velocity(
+        &mut self,
+        body_unique_id: i32,
+        linear_velocity: Option<[f64; 3]>,
+        angular_velocity: Option<[f64; 3]>,
+    ) -> BulletResult<()> {
+        if linear_velocity.is_none() && angular_velocity.is_none() {
+            return Err(BulletError::CommandFailed {
+                message: "Expected linear and/or angular velocity",
+                code: -1,
+            });
+        }
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
+        if let Some(vel) = linear_velocity {
+            unsafe {
+                ffi::b3CreatePoseCommandSetBaseLinearVelocity(command, vel.as_ptr());
+            }
+        }
+        if let Some(vel) = angular_velocity {
+            unsafe {
+                ffi::b3CreatePoseCommandSetBaseAngularVelocity(command, vel.as_ptr());
+            }
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn get_num_bodies(&self) -> i32 {
+        unsafe { ffi::b3GetNumBodies(self.handle) }
+    }
+
+    pub fn get_body_unique_id(&self, serial_index: i32) -> i32 {
+        unsafe { ffi::b3GetBodyUniqueId(self.handle, serial_index) }
+    }
+
+    pub fn get_body_info(&self, body_unique_id: i32) -> BulletResult<BodyInfo> {
+        let mut raw = MaybeUninit::<ffi::b3BodyInfo>::uninit();
+        let result = unsafe { ffi::b3GetBodyInfo(self.handle, body_unique_id, raw.as_mut_ptr()) };
+        if result == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Cannot query body info",
+                code: result,
+            });
+        }
+        let raw = unsafe { raw.assume_init() };
+        let base_name = Self::read_c_string(&raw.m_baseName);
+        let body_name = Self::read_c_string(&raw.m_bodyName);
+        Ok(BodyInfo {
+            base_name,
+            body_name,
+        })
+    }
+
+    pub fn get_num_joints(&self, body_unique_id: i32) -> i32 {
+        unsafe { ffi::b3GetNumJoints(self.handle, body_unique_id) }
+    }
+
+    pub fn get_joint_info(&self, body_unique_id: i32, joint_index: i32) -> BulletResult<JointInfo> {
+        let mut raw = MaybeUninit::<ffi::b3JointInfo>::uninit();
+        let success = unsafe {
+            ffi::b3GetJointInfo(self.handle, body_unique_id, joint_index, raw.as_mut_ptr())
+        };
+        if success == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Cannot query joint info",
+                code: success,
+            });
+        }
+        unsafe { raw.assume_init() }.try_into()
+    }
+
+    pub fn get_joint_state(
+        &mut self,
+        body_unique_id: i32,
+        joint_index: i32,
+    ) -> BulletResult<JointState> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        self.read_joint_state(status.handle, joint_index)
+    }
+
+    pub fn get_joint_states(
+        &mut self,
+        body_unique_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<Vec<JointState>> {
+        if joint_indices.is_empty() {
+            return Ok(Vec::new());
+        }
+        let status = self.request_actual_state_status(body_unique_id)?;
+        joint_indices
+            .iter()
+            .map(|&index| self.read_joint_state(status.handle, index))
+            .collect()
+    }
+
+    pub fn get_joint_state_multi_dof(
+        &mut self,
+        body_unique_id: i32,
+        joint_index: i32,
+    ) -> BulletResult<JointStateMultiDof> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        self.read_joint_state_multi_dof(status.handle, joint_index)
+    }
+
+    pub fn get_joint_states_multi_dof(
+        &mut self,
+        body_unique_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<Vec<JointStateMultiDof>> {
+        if joint_indices.is_empty() {
+            return Ok(Vec::new());
+        }
+        let status = self.request_actual_state_status(body_unique_id)?;
+        joint_indices
+            .iter()
+            .map(|&index| self.read_joint_state_multi_dof(status.handle, index))
+            .collect()
+    }
+
+    pub fn get_base_position_and_orientation(
+        &mut self,
+        body_unique_id: i32,
+    ) -> BulletResult<na::Isometry3<f64>> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        let (base, _) = Self::extract_base_state(status.handle)?;
+        Ok(base)
+    }
+
+    pub fn get_base_velocity(&mut self, body_unique_id: i32) -> BulletResult<[f64; 6]> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        let (_, velocity) = Self::extract_base_state(status.handle)?;
+        Ok(velocity)
+    }
+
+    pub fn get_link_state(
+        &mut self,
+        body_unique_id: i32,
+        link_index: i32,
+        compute_forward_kinematics: bool,
+        compute_link_velocity: bool,
+    ) -> BulletResult<LinkState> {
+        let status = self.request_actual_state_status_with_flags(
+            body_unique_id,
+            compute_link_velocity,
+            compute_forward_kinematics,
+        )?;
+        self.read_link_state(status.handle, link_index)
+    }
+
+    pub fn get_link_states(
+        &mut self,
+        body_unique_id: i32,
+        link_indices: &[i32],
+        compute_forward_kinematics: bool,
+        compute_link_velocity: bool,
+    ) -> BulletResult<Vec<LinkState>> {
+        if link_indices.is_empty() {
+            return Ok(Vec::new());
+        }
+        let status = self.request_actual_state_status_with_flags(
+            body_unique_id,
+            compute_link_velocity,
+            compute_forward_kinematics,
+        )?;
+        link_indices
+            .iter()
+            .map(|&index| self.read_link_state(status.handle, index))
+            .collect()
+    }
+
+    pub fn reset_joint_state(
+        &mut self,
+        body_unique_id: i32,
+        joint_index: i32,
+        target_position: f64,
+        target_velocity: Option<f64>,
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
+        unsafe {
+            ffi::b3CreatePoseCommandSetJointPosition(
+                self.handle,
+                command,
+                joint_index,
+                target_position,
+            );
+            ffi::b3CreatePoseCommandSetJointVelocity(
+                self.handle,
+                command,
+                joint_index,
+                target_velocity.unwrap_or(0.0),
+            );
+        }
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn reset_joint_state_multi_dof(
+        &mut self,
+        body_unique_id: i32,
+        joint_index: i32,
+        positions: Option<&[f64]>,
+        velocities: Option<&[f64]>,
+    ) -> BulletResult<()> {
+        let target = MultiDofTarget {
+            joint_index,
+            positions,
+            velocities,
+        };
+        self.reset_joint_states_multi_dof(body_unique_id, slice::from_ref(&target))
+    }
+
+    pub fn reset_joint_states_multi_dof(
+        &mut self,
+        body_unique_id: i32,
+        targets: &[MultiDofTarget<'_>],
+    ) -> BulletResult<()> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
+
+        for target in targets {
+            let mut position_buf = [0.0_f64; 4];
+            let mut velocity_buf = [0.0_f64; 3];
+            let mut position_size = 0_i32;
+            let mut velocity_size = 0_i32;
+
+            if let Some(positions) = target.positions {
+                if positions.len() > position_buf.len() {
+                    return Err(BulletError::CommandFailed {
+                        message: "Position vector too large for multi-DoF joint",
+                        code: positions.len() as i32,
+                    });
+                }
+                if !positions.is_empty() {
+                    position_buf[..positions.len()].copy_from_slice(positions);
+                    position_size = positions.len() as i32;
+                }
+            }
+
+            if let Some(velocities) = target.velocities {
+                if velocities.len() > velocity_buf.len() {
+                    return Err(BulletError::CommandFailed {
+                        message: "Velocity vector too large for multi-DoF joint",
+                        code: velocities.len() as i32,
+                    });
+                }
+                if !velocities.is_empty() {
+                    velocity_buf[..velocities.len()].copy_from_slice(velocities);
+                    velocity_size = velocities.len() as i32;
+                }
+            }
+
+            if position_size == 0 && velocity_size == 0 {
+                return Err(BulletError::CommandFailed {
+                    message: "Expected position and/or velocity data for multi-DoF joint",
+                    code: target.joint_index,
+                });
+            }
+
+            if position_size > 0 {
+                unsafe {
+                    ffi::b3CreatePoseCommandSetJointPositionMultiDof(
+                        self.handle,
+                        command,
+                        target.joint_index,
+                        position_buf.as_ptr(),
+                        position_size,
+                    );
+                }
+            }
+
+            if velocity_size > 0 {
+                unsafe {
+                    ffi::b3CreatePoseCommandSetJointVelocityMultiDof(
+                        self.handle,
+                        command,
+                        target.joint_index,
+                        velocity_buf.as_ptr(),
+                        velocity_size,
+                    );
+                }
+            }
+        }
+
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+}
+
+/// ! =====================================================================================================================================
+/// ### Dynamics & Control
+///
+/// | API | Status | Notes |
+/// | --- | --- | --- |
+/// | changeDynamics | **Implemented** | Mutation wrapper |
+/// | getDynamicsInfo | **Implemented** | Mirrors Bullet query |
+/// | setJointMotorControl | Optional | Legacy single-call (deprecated) |
+/// | setJointMotorControl2 | **Implemented** | Primary motor control path |
+/// | setJointMotorControlMultiDof | **Implemented** | Multi-DoF control |
+/// | setJointMotorControlMultiDofArray | **Implemented** | Multi-DoF batch control |
+/// | setJointMotorControlArray | **Implemented** | Batch joint control |
+/// | applyExternalForce | **Implemented** | Core dynamics action |
+/// | applyExternalTorque | **Implemented** | Core dynamics action |
+/// | calculateInverseDynamics | **Implemented** | Advanced dynamics |
+/// | calculateJacobian | **Implemented** | Advanced dynamics |
+/// | calculateMassMatrix | **Implemented** | Advanced dynamics |
+/// | calculateInverseKinematics | **Implemented** | Depends on jacobians |
+/// | calculateInverseKinematics2 | **Implemented** | Multi-end-effector variant |
+impl PhysicsClient {
+    pub fn change_dynamics(
+        &mut self,
+        body_unique_id: i32,
+        link_index: i32,
+        update: &DynamicsUpdate,
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitChangeDynamicsInfo(self.handle) };
+
+        unsafe {
+            if let Some(mass) = update.mass {
+                ffi::b3ChangeDynamicsInfoSetMass(command, body_unique_id, link_index, mass);
+            }
+            if let Some(local_inertia) = update.local_inertia_diagonal {
+                ffi::b3ChangeDynamicsInfoSetLocalInertiaDiagonal(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    local_inertia.as_ptr(),
+                );
+            }
+            if let Some(anisotropic) = update.anisotropic_friction {
+                ffi::b3ChangeDynamicsInfoSetAnisotropicFriction(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    anisotropic.as_ptr(),
+                );
+            }
+            if let Some((lower, upper)) = update.joint_limit {
+                ffi::b3ChangeDynamicsInfoSetJointLimit(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    lower,
+                    upper,
+                );
+            }
+            if let Some(limit_force) = update.joint_limit_force {
+                ffi::b3ChangeDynamicsInfoSetJointLimitForce(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    limit_force,
+                );
+            }
+            if let Some(dynamic_type) = update.dynamic_type {
+                ffi::b3ChangeDynamicsInfoSetDynamicType(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    dynamic_type,
+                );
+            }
+            if let Some(lateral) = update.lateral_friction {
+                ffi::b3ChangeDynamicsInfoSetLateralFriction(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    lateral,
+                );
+            }
+            if let Some(spinning) = update.spinning_friction {
+                ffi::b3ChangeDynamicsInfoSetSpinningFriction(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    spinning,
+                );
+            }
+            if let Some(rolling) = update.rolling_friction {
+                ffi::b3ChangeDynamicsInfoSetRollingFriction(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    rolling,
+                );
+            }
+            if let Some(restitution) = update.restitution {
+                ffi::b3ChangeDynamicsInfoSetRestitution(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    restitution,
+                );
+            }
+            if let Some(linear_damping) = update.linear_damping {
+                ffi::b3ChangeDynamicsInfoSetLinearDamping(command, body_unique_id, linear_damping);
+            }
+            if let Some(angular_damping) = update.angular_damping {
+                ffi::b3ChangeDynamicsInfoSetAngularDamping(
+                    command,
+                    body_unique_id,
+                    angular_damping,
+                );
+            }
+            if let Some(joint_damping) = update.joint_damping {
+                ffi::b3ChangeDynamicsInfoSetJointDamping(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    joint_damping,
+                );
+            }
+            if let Some((stiffness, damping)) = update.contact_stiffness_and_damping {
+                ffi::b3ChangeDynamicsInfoSetContactStiffnessAndDamping(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    stiffness,
+                    damping,
+                );
+            }
+            if let Some(anchor) = update.friction_anchor {
+                ffi::b3ChangeDynamicsInfoSetFrictionAnchor(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    anchor as i32,
+                );
+            }
+            if let Some(radius) = update.ccd_swept_sphere_radius {
+                ffi::b3ChangeDynamicsInfoSetCcdSweptSphereRadius(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    radius,
+                );
+            }
+            if let Some(threshold) = update.contact_processing_threshold {
+                ffi::b3ChangeDynamicsInfoSetContactProcessingThreshold(
+                    command,
+                    body_unique_id,
+                    link_index,
+                    threshold,
+                );
+            }
+            if let Some(state) = update.activation_state {
+                ffi::b3ChangeDynamicsInfoSetActivationState(command, body_unique_id, state);
+            }
+            if let Some(max_velocity) = update.max_joint_velocity {
+                ffi::b3ChangeDynamicsInfoSetMaxJointVelocity(command, body_unique_id, max_velocity);
+            }
+            if let Some(collision_margin) = update.collision_margin {
+                ffi::b3ChangeDynamicsInfoSetCollisionMargin(
+                    command,
+                    body_unique_id,
+                    collision_margin,
+                );
+            }
+        }
+
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+        )?;
+        Ok(())
+    }
+
+    pub fn get_dynamics_info(
+        &mut self,
+        body_unique_id: i32,
+        link_index: i32,
+    ) -> BulletResult<DynamicsInfo> {
+        self.ensure_can_submit()?;
+        let command =
+            unsafe { ffi::b3GetDynamicsInfoCommandInit(self.handle, body_unique_id, link_index) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_GET_DYNAMICS_INFO_COMPLETED,
+        )?;
+
+        let mut info = MaybeUninit::<ffi::b3DynamicsInfo>::uninit();
+        let success = unsafe { ffi::b3GetDynamicsInfo(status.handle, info.as_mut_ptr()) };
+        if success == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Failed to retrieve dynamics info",
+                code: success,
+            });
+        }
+        let info = unsafe { info.assume_init() };
+        Ok(DynamicsInfo {
+            mass: info.m_mass,
+            lateral_friction: info.m_lateralFrictionCoeff,
+            local_inertia_diagonal: info.m_localInertialDiagonal,
+            local_inertia_position: [
+                info.m_localInertialFrame[0],
+                info.m_localInertialFrame[1],
+                info.m_localInertialFrame[2],
+            ],
+            local_inertia_orientation: [
+                info.m_localInertialFrame[3],
+                info.m_localInertialFrame[4],
+                info.m_localInertialFrame[5],
+                info.m_localInertialFrame[6],
+            ],
+            restitution: info.m_restitution,
+            rolling_friction: info.m_rollingFrictionCoeff,
+            spinning_friction: info.m_spinningFrictionCoeff,
+            contact_damping: info.m_contactDamping,
+            contact_stiffness: info.m_contactStiffness,
+            body_type: info.m_bodyType.try_into()?,
+            collision_margin: info.m_collisionMargin,
+            angular_damping: info.m_angularDamping,
+            linear_damping: info.m_linearDamping,
+            ccd_swept_sphere_radius: info.m_ccdSweptSphereRadius,
+            contact_processing_threshold: info.m_contactProcessingThreshold,
+            activation_state: info.m_activationState,
+            friction_anchor: info.m_frictionAnchor != 0,
+            dynamic_type: info.m_dynamicType,
+        })
+    }
+
+    pub fn set_joint_motor_control(
+        &mut self,
+        body_unique_id: i32,
+        joint_index: i32,
+        control_mode: JointControlMode,
+        target_value: f64,
+        max_force: Option<f64>,
+        gain: Option<f64>,
+    ) -> BulletResult<()> {
+        let mut options = JointMotorControl2Options {
+            joint_index,
+            control_mode,
+            ..Default::default()
+        };
+
+        match control_mode {
+            JointControlMode::Velocity => {
+                options.target_velocity = Some(target_value);
+                options.velocity_gain = gain;
+                options.force = max_force;
+            }
+            JointControlMode::Torque => {
+                options.force = Some(target_value);
+            }
+            _ => {
+                options.target_position = Some(target_value);
+                options.position_gain = gain;
+                options.force = max_force;
+            }
+        }
+
+        self.set_joint_motor_control2(body_unique_id, &options)
+    }
+
+    pub fn set_joint_motor_control2(
+        &mut self,
+        body_unique_id: i32,
+        options: &JointMotorControl2Options,
+    ) -> BulletResult<()> {
+        self.ensure_can_submit()?;
+        let joint_info = self.get_joint_info(body_unique_id, options.joint_index)?;
+        let command = unsafe {
+            ffi::b3JointControlCommandInit2(
+                self.handle,
+                body_unique_id,
+                options.control_mode.as_raw(),
+            )
+        };
+
+        let u_index = joint_info.u_index;
+        if u_index < 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Joint has no velocity DOF for motor control",
+                code: u_index,
+            });
+        }
+
+        unsafe {
+            if let Some(max_velocity) = options.max_velocity {
+                ffi::b3JointControlSetMaximumVelocity(command, u_index, max_velocity);
+            }
+        }
+
+        match options.control_mode {
+            mode if mode.is_velocity_based() => {
+                let target_velocity = options.target_velocity.unwrap_or(0.0);
+                unsafe {
+                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
+                    ffi::b3JointControlSetKd(
+                        command,
+                        u_index,
+                        options.velocity_gain.unwrap_or(1.0),
+                    );
+                    ffi::b3JointControlSetMaximumForce(
+                        command,
+                        u_index,
+                        options.force.unwrap_or(joint_info.max_force),
+                    );
+                }
+            }
+            mode if mode.is_torque_based() => unsafe {
+                ffi::b3JointControlSetDesiredForceTorque(
+                    command,
+                    u_index,
+                    options.force.unwrap_or(0.0),
+                );
+            },
+            _ => {
+                if joint_info.q_index < 0 {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint has no position DOF for position control",
+                        code: joint_info.q_index,
+                    });
+                }
+                let target_position = options.target_position.unwrap_or(0.0);
+                let target_velocity = options.target_velocity.unwrap_or(0.0);
+                unsafe {
+                    ffi::b3JointControlSetDesiredPosition(
+                        command,
+                        joint_info.q_index,
+                        target_position,
+                    );
+                    ffi::b3JointControlSetKp(
+                        command,
+                        u_index,
+                        options.position_gain.unwrap_or(0.1),
+                    );
+                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
+                    ffi::b3JointControlSetKd(
+                        command,
+                        u_index,
+                        options.velocity_gain.unwrap_or(1.0),
+                    );
+                    ffi::b3JointControlSetMaximumForce(
+                        command,
+                        u_index,
+                        options.force.unwrap_or(joint_info.max_force),
+                    );
+                }
+            }
+        }
+
         self.submit_simple_command(
             command,
             ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
@@ -1033,2007 +3100,6 @@ impl PhysicsClient {
         results.truncate(result_dof as usize);
         Ok(results)
     }
-
-    /// Warning: in many cases it is best to leave the timeStep to default, which is 240Hz.
-    /// Several parameters are tuned with this value in mind. For example the number of solver
-    /// iterations and the error reduction parameters (erp) for contact, friction and non-contact
-    /// joints are related to the time step. If you change the time step, you may need to re-tune
-    /// those values accordingly, especially the erp values.
-    ///
-    /// You can set the physics engine timestep that is used when calling
-    /// [`step_simulation`](`Self::step_simulation()`).
-    /// It is best to only call this method at the start of a simulation.
-    /// Don't change this time step regularly.
-    pub fn set_time_step(&mut self, time_step: f64) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
-        unsafe {
-            ffi::b3PhysicsParamSetTimeStep(command, time_step);
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    /// Update the global default contact ERP (error reduction parameter).
-    pub fn set_default_contact_erp(&mut self, default_contact_erp: f64) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
-        unsafe {
-            ffi::b3PhysicsParamSetDefaultContactERP(command, default_contact_erp);
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    /// By default, the physics server will not step the simulation, unless you explicitly send a
-    /// [`step_simulation`](`Self::step_simulation()`) command.
-    /// This way you can maintain control determinism of the simulation
-    /// It is possible to run the simulation in real-time by letting the physics server
-    /// automatically step the simulation according to its real-time-clock (RTC) using the
-    /// set_real_time_simulation command. If you enable the real-time simulation,
-    /// you don't need to call [`step_simulation`](`Self::step_simulation()`).
-    ///
-    /// Note that set_real_time_simulation has no effect in
-    /// [`Direct mode`](`crate::mode::Mode::Direct`) :
-    /// in [`Direct mode`](`crate::mode::Mode::Direct`) mode the physics
-    /// server and client happen in the same thread and you trigger every command.
-    /// In [`Gui mode`](`crate::mode::Mode::Gui`) and in Virtual Reality mode, and TCP/UDP mode,
-    /// the physics server runs in a separate thread from the client (RuBullet),
-    /// and set_real_time_simulation allows the physics server thread
-    /// to add additional calls to  [`step_simulation`](`Self::step_simulation()`).
-    ///
-    /// # Arguments
-    /// * `enable_real_time_simulation` - activates or deactivates real-time simulation
-    pub fn set_real_time_simulation(&mut self, enable: bool) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
-        unsafe {
-            ffi::b3PhysicsParamSetRealTimeSimulation(command, enable as i32);
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    /// Apply a batch of physics engine parameters, mirroring PyBullet's `setPhysicsEngineParameter`.
-    pub fn set_physics_engine_parameter(
-        &mut self,
-        update: &PhysicsEngineParametersUpdate,
-    ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
-        Self::apply_physics_engine_update(command, update);
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    /// Query the current physics simulation parameters from the server.
-    pub fn get_physics_engine_parameters(&mut self) -> BulletResult<PhysicsSimulationParameters> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitRequestPhysicsParamCommand(self.handle) };
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_PHYSICS_SIMULATION_PARAMETERS_COMPLETED,
-        )?;
-
-        let mut raw = MaybeUninit::<ffi::b3PhysicsSimulationParameters>::uninit();
-        let result =
-            unsafe { ffi::b3GetStatusPhysicsSimulationParameters(status.handle, raw.as_mut_ptr()) };
-        if result == 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Failed to fetch physics simulation parameters",
-                code: result,
-            });
-        }
-        let raw = unsafe { raw.assume_init() };
-
-        Ok(PhysicsSimulationParameters {
-            delta_time: raw.m_deltaTime,
-            simulation_timestamp: raw.m_simulationTimestamp,
-            gravity_acceleration: raw.m_gravityAcceleration,
-            num_simulation_sub_steps: raw.m_numSimulationSubSteps,
-            num_solver_iterations: raw.m_numSolverIterations,
-            warm_starting_factor: raw.m_warmStartingFactor,
-            articulated_warm_starting_factor: raw.m_articulatedWarmStartingFactor,
-            use_real_time_simulation: raw.m_useRealTimeSimulation != 0,
-            use_split_impulse: raw.m_useSplitImpulse != 0,
-            split_impulse_penetration_threshold: raw.m_splitImpulsePenetrationThreshold,
-            contact_breaking_threshold: raw.m_contactBreakingThreshold,
-            internal_sim_flags: raw.m_internalSimFlags,
-            default_contact_erp: raw.m_defaultContactERP,
-            collision_filter_mode: raw.m_collisionFilterMode,
-            enable_file_caching: raw.m_enableFileCaching != 0,
-            restitution_velocity_threshold: raw.m_restitutionVelocityThreshold,
-            default_non_contact_erp: raw.m_defaultNonContactERP,
-            friction_erp: raw.m_frictionERP,
-            default_global_cfm: raw.m_defaultGlobalCFM,
-            friction_cfm: raw.m_frictionCFM,
-            enable_cone_friction: raw.m_enableConeFriction != 0,
-            deterministic_overlapping_pairs: raw.m_deterministicOverlappingPairs != 0,
-            allowed_ccd_penetration: raw.m_allowedCcdPenetration,
-            joint_feedback_mode: raw.m_jointFeedbackMode,
-            solver_residual_threshold: raw.m_solverResidualThreshold,
-            contact_slop: raw.m_contactSlop,
-            enable_sat: raw.m_enableSAT != 0,
-            constraint_solver_type: raw.m_constraintSolverType,
-            minimum_solver_island_size: raw.m_minimumSolverIslandSize,
-            report_solver_analytics: raw.m_reportSolverAnalytics != 0,
-            sparse_sdf_voxel_size: raw.m_sparseSdfVoxelSize,
-            num_non_contact_inner_iterations: raw.m_numNonContactInnerIterations,
-        })
-    }
-
-    /// Set internal simulation flags (expert-level API).
-    pub fn set_internal_sim_flags(&mut self, flags: i32) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
-        unsafe {
-            ffi::b3PhysicsParamSetInternalSimFlags(command, flags);
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-}
-
-/// ! =====================================================================================================================================
-/// ### World Authoring & Persistence
-///
-/// | API | Status | Notes |
-/// | --- | --- | --- |
-/// | loadURDF | **Implemented** | Supports position/orientation/options |
-/// | loadSDF | **Implemented** | Returns body list |
-/// | loadSoftBody | Optional | Requires soft-body build support |
-/// | createSoftBodyAnchor | Optional | Soft-body specific |
-/// | loadBullet | **Implemented** | World snapshot load |
-/// | saveBullet | **Implemented** | World snapshot save |
-/// | restoreState | **Implemented** | In-memory state restore |
-/// | saveState | **Implemented** | In-memory state save |
-/// | removeState | **Implemented** | Pair with saveState |
-/// | loadMJCF | **Implemented** | Returns body list |
-/// | saveWorld | **Implemented** | Script export helper |
-/// | setAdditionalSearchPath | **Implemented** | Search path registry |
-/// | vhacd | Optional | Requires VHACD build flag |
-impl PhysicsClient {
-    pub fn load_urdf(
-        &mut self,
-        file: impl AsRef<Path>,
-        options: impl Into<Option<UrdfOptions>>,
-    ) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
-        let file_c = Self::path_to_cstring(file.as_ref())?;
-        let command = unsafe { ffi::b3LoadUrdfCommandInit(self.handle, file_c.as_ptr()) };
-
-        let options = options.into().unwrap_or_default();
-
-        if options.flags != 0 {
-            unsafe {
-                ffi::b3LoadUrdfCommandSetFlags(command, options.flags);
-            }
-        }
-
-        if let Some(base) = options.base.as_ref() {
-            let (position, orientation) = isometry_to_raw_parts(base);
-            unsafe {
-                ffi::b3LoadUrdfCommandSetStartPosition(
-                    command,
-                    position[0],
-                    position[1],
-                    position[2],
-                );
-                ffi::b3LoadUrdfCommandSetStartOrientation(
-                    command,
-                    orientation[0],
-                    orientation[1],
-                    orientation[2],
-                    orientation[3],
-                );
-            }
-        }
-
-        if let Some(use_maximal) = options.use_maximal_coordinates {
-            unsafe {
-                ffi::b3LoadUrdfCommandSetUseMultiBody(command, (!use_maximal) as i32);
-            }
-        }
-
-        if options.use_fixed_base {
-            unsafe {
-                ffi::b3LoadUrdfCommandSetUseFixedBase(command, 1);
-            }
-        }
-
-        if let Some(global_scaling) = options.global_scaling {
-            unsafe {
-                ffi::b3LoadUrdfCommandSetGlobalScaling(command, global_scaling);
-            }
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_URDF_LOADING_COMPLETED,
-        )?;
-
-        let body_id = unsafe { ffi::b3GetStatusBodyIndex(status.handle) };
-        Ok(body_id)
-    }
-
-    pub fn load_sdf(
-        &mut self,
-        file: impl AsRef<Path>,
-        options: impl Into<Option<SdfOptions>>,
-    ) -> BulletResult<Vec<i32>> {
-        self.ensure_can_submit()?;
-        let file_c = Self::path_to_cstring(file.as_ref())?;
-        let command = unsafe { ffi::b3LoadSdfCommandInit(self.handle, file_c.as_ptr()) };
-
-        let options = options.into().unwrap_or_default();
-
-        if let Some(use_maximal) = options.use_maximal_coordinates {
-            unsafe {
-                ffi::b3LoadSdfCommandSetUseMultiBody(command, (!use_maximal) as i32);
-            }
-        }
-
-        if let Some(global_scaling) = options.global_scaling {
-            unsafe {
-                ffi::b3LoadSdfCommandSetUseGlobalScaling(command, global_scaling);
-            }
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_SDF_LOADING_COMPLETED,
-        )?;
-
-        Self::collect_body_indices(status.handle)
-    }
-
-    pub fn load_mjcf(
-        &mut self,
-        file: impl AsRef<Path>,
-        options: impl Into<Option<MjcfOptions>>,
-    ) -> BulletResult<Vec<i32>> {
-        self.ensure_can_submit()?;
-        let file_c = Self::path_to_cstring(file.as_ref())?;
-        let command = unsafe { ffi::b3LoadMJCFCommandInit(self.handle, file_c.as_ptr()) };
-
-        let options = options.into().unwrap_or_default();
-
-        if let Some(flags) = options.flags {
-            unsafe {
-                ffi::b3LoadMJCFCommandSetFlags(command, flags);
-            }
-        }
-
-        if let Some(use_multi_body) = options.use_multi_body {
-            unsafe {
-                ffi::b3LoadMJCFCommandSetUseMultiBody(command, use_multi_body as i32);
-            }
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_MJCF_LOADING_COMPLETED,
-        )?;
-
-        Self::collect_body_indices(status.handle)
-    }
-
-    pub fn load_bullet(&mut self, file: impl AsRef<Path>) -> BulletResult<Vec<i32>> {
-        self.ensure_can_submit()?;
-        let file_c = Self::path_to_cstring(file.as_ref())?;
-        let command = unsafe { ffi::b3LoadBulletCommandInit(self.handle, file_c.as_ptr()) };
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_BULLET_LOADING_COMPLETED,
-        )?;
-
-        Self::collect_body_indices(status.handle)
-    }
-
-    pub fn save_bullet(&mut self, file: impl AsRef<Path>) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let file_c = Self::path_to_cstring(file.as_ref())?;
-        let command = unsafe { ffi::b3SaveBulletCommandInit(self.handle, file_c.as_ptr()) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_BULLET_SAVING_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn save_world(&mut self, file: impl AsRef<Path>) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let file_c = Self::path_to_cstring(file.as_ref())?;
-        let command = unsafe { ffi::b3SaveWorldCommandInit(self.handle, file_c.as_ptr()) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_SAVE_WORLD_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn save_state(&mut self) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3SaveStateCommandInit(self.handle) };
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_SAVE_STATE_COMPLETED,
-        )?;
-
-        let state_id = unsafe { ffi::b3GetStatusGetStateId(status.handle) };
-        Ok(state_id)
-    }
-
-    pub fn restore_state(&mut self, options: RestoreStateOptions) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3LoadStateCommandInit(self.handle) };
-
-        if let Some(state_id) = options.state_id {
-            unsafe {
-                ffi::b3LoadStateSetStateId(command, state_id);
-            }
-        }
-
-        let file_c = options
-            .file
-            .as_ref()
-            .map(|path| Self::path_to_cstring(path.as_path()))
-            .transpose()?;
-
-        if let Some(ref file_c) = file_c {
-            unsafe { ffi::b3LoadStateSetFileName(command, file_c.as_ptr()) };
-        }
-
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_RESTORE_STATE_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn remove_state(&mut self, state_id: i32) -> BulletResult<()> {
-        if state_id < 0 {
-            return Ok(());
-        }
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitRemoveStateCommand(self.handle, state_id) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_STATE_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn bullet_data_path() -> PathBuf {
-        {
-            #[cfg(target_os = "windows")]
-            {
-                env::var_os("LOCALAPPDATA")
-                    .or_else(|| env::var_os("USERPROFILE"))
-                    .map(PathBuf::from)
-            }
-
-            #[cfg(target_os = "macos")]
-            {
-                use std::path::PathBuf;
-                env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|home| home.join("Library").join("Application Support"))
-            }
-
-            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-            {
-                use std::path::PathBuf;
-                env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|home| home.join(".local").join("share"))
-            }
-        }
-        .map(|path| path.join("bullet"))
-        .unwrap()
-    }
-
-    pub fn set_additional_search_path(&mut self, path: impl AsRef<Path>) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let path_c = Self::path_to_cstring(path.as_ref())?;
-        let command = unsafe { ffi::b3SetAdditionalSearchPath(self.handle, path_c.as_ptr()) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-}
-
-/// ! =====================================================================================================================================
-/// ### Asset Creation & Mutation
-///
-/// | API | Status | Notes |
-/// | --- | --- | --- |
-/// | createCollisionShape | **Implemented** | Supports primitive/mesh geometry |
-/// | createCollisionShapeArray | **Implemented** | Compound shape builder |
-/// | removeCollisionShape | **Implemented** | Clean-up helper |
-/// | getMeshData | Pending | Mesh inspection |
-/// | getTetraMeshData | Pending | Soft-body mesh |
-/// | resetMeshData | Optional | Deformable specific |
-/// | createVisualShape | **Implemented** | Visual geometry authoring |
-/// | createVisualShapeArray | **Implemented** | Bulk visual authoring |
-/// | createMultiBody | **Implemented** | Procedural multibody build |
-/// | createConstraint | **Implemented** | Constraint authoring |
-/// | changeConstraint | **Implemented** | Constraint mutation |
-/// | removeConstraint | **Implemented** | Constraint teardown |
-/// | enableJointForceTorqueSensor | **Implemented** | Sensor toggle |
-/// | removeBody | **Implemented** | Body teardown |
-/// | getNumConstraints | **Implemented** | Constraint enumeration |
-/// | getConstraintInfo | **Implemented** | Constraint query |
-/// | getConstraintState | **Implemented** | Constraint forces |
-/// | getConstraintUniqueId | **Implemented** | Constraint enumeration |
-/// | changeVisualShape | **Implemented** | Visual mutation |
-/// | resetVisualShapeData | Pending | Legacy alias |
-/// | loadTexture | **Implemented** | Visual assets |
-/// | changeTexture | **Implemented** | Visual assets |
-impl PhysicsClient {
-    pub fn create_collision_shape(
-        &mut self,
-        options: &CollisionShapeOptions<'_>,
-    ) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
-        let mut scratch = GeometryScratch::default();
-        let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
-        let shape_index = self.add_collision_geometry(command, &options.geometry, &mut scratch)?;
-
-        if let Some(flags) = options.flags {
-            unsafe { ffi::b3CreateCollisionSetFlag(command, shape_index, flags) };
-        }
-
-        if let Some(transform) = &options.child_transform {
-            let (position, orientation) = isometry_to_raw_parts(transform);
-            unsafe {
-                ffi::b3CreateCollisionShapeSetChildTransform(
-                    command,
-                    shape_index,
-                    position.as_ptr(),
-                    orientation.as_ptr(),
-                );
-            }
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_COLLISION_SHAPE_COMPLETED,
-        )?;
-        let shape_id = unsafe { ffi::b3GetStatusCollisionShapeUniqueId(status.handle) };
-        if shape_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Bullet failed to create collision shape",
-                code: shape_id,
-            });
-        }
-        Ok(shape_id)
-    }
-
-    pub fn create_collision_shape_array(
-        &mut self,
-        options: &CollisionShapeArrayOptions<'_>,
-    ) -> BulletResult<i32> {
-        if options.children.is_empty() {
-            return Err(BulletError::CommandFailed {
-                message: "Collision shape array requires at least one entry",
-                code: -1,
-            });
-        }
-
-        self.ensure_can_submit()?;
-        let mut scratch = GeometryScratch::default();
-        let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
-
-        for child in options.children {
-            let index = self.add_collision_geometry(command, &child.geometry, &mut scratch)?;
-            if let Some(flags) = child.flags {
-                unsafe { ffi::b3CreateCollisionSetFlag(command, index, flags) };
-            }
-            if let Some(transform) = &child.transform {
-                let (position, orientation) = isometry_to_raw_parts(transform);
-                unsafe {
-                    ffi::b3CreateCollisionShapeSetChildTransform(
-                        command,
-                        index,
-                        position.as_ptr(),
-                        orientation.as_ptr(),
-                    );
-                }
-            }
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_COLLISION_SHAPE_COMPLETED,
-        )?;
-        let shape_id = unsafe { ffi::b3GetStatusCollisionShapeUniqueId(status.handle) };
-        if shape_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Bullet failed to create collision shape array",
-                code: shape_id,
-            });
-        }
-        Ok(shape_id)
-    }
-
-    pub fn remove_collision_shape(&mut self, collision_shape_id: i32) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command =
-            unsafe { ffi::b3InitRemoveCollisionShapeCommand(self.handle, collision_shape_id) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn create_visual_shape(&mut self, options: &VisualShapeOptions<'_>) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
-        let mut scratch = GeometryScratch::default();
-        let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
-
-        let shape_index = self.add_visual_geometry(command, &options.geometry, &mut scratch)?;
-
-        if let Some(flags) = options.flags {
-            unsafe { ffi::b3CreateVisualSetFlag(command, shape_index, flags) };
-        }
-        if let Some(transform) = &options.transform {
-            let (position, orientation) = isometry_to_raw_parts(transform);
-            unsafe {
-                ffi::b3CreateVisualShapeSetChildTransform(
-                    command,
-                    shape_index,
-                    position.as_ptr(),
-                    orientation.as_ptr(),
-                );
-            }
-        }
-        if let Some(rgba) = options.rgba {
-            unsafe { ffi::b3CreateVisualShapeSetRGBAColor(command, shape_index, rgba.as_ptr()) };
-        }
-        if let Some(specular) = options.specular {
-            unsafe {
-                ffi::b3CreateVisualShapeSetSpecularColor(command, shape_index, specular.as_ptr())
-            };
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_VISUAL_SHAPE_COMPLETED,
-        )?;
-        let visual_id = unsafe { ffi::b3GetStatusVisualShapeUniqueId(status.handle) };
-        if visual_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Bullet failed to create visual shape",
-                code: visual_id,
-            });
-        }
-        Ok(visual_id)
-    }
-
-    pub fn create_visual_shape_array(
-        &mut self,
-        options: &VisualShapeArrayOptions<'_>,
-    ) -> BulletResult<i32> {
-        if options.children.is_empty() {
-            return Err(BulletError::CommandFailed {
-                message: "Visual shape array requires at least one entry",
-                code: -1,
-            });
-        }
-
-        self.ensure_can_submit()?;
-        let mut scratch = GeometryScratch::default();
-        let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
-
-        for child in options.children {
-            let index = self.add_visual_geometry(command, &child.geometry, &mut scratch)?;
-            if let Some(flags) = child.flags {
-                unsafe { ffi::b3CreateVisualSetFlag(command, index, flags) };
-            }
-            if let Some(transform) = &child.transform {
-                let (position, orientation) = isometry_to_raw_parts(transform);
-                unsafe {
-                    ffi::b3CreateVisualShapeSetChildTransform(
-                        command,
-                        index,
-                        position.as_ptr(),
-                        orientation.as_ptr(),
-                    );
-                }
-            }
-            if let Some(rgba) = child.rgba {
-                unsafe { ffi::b3CreateVisualShapeSetRGBAColor(command, index, rgba.as_ptr()) };
-            }
-            if let Some(specular) = child.specular {
-                unsafe {
-                    ffi::b3CreateVisualShapeSetSpecularColor(command, index, specular.as_ptr())
-                };
-            }
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_VISUAL_SHAPE_COMPLETED,
-        )?;
-        let visual_id = unsafe { ffi::b3GetStatusVisualShapeUniqueId(status.handle) };
-        if visual_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Bullet failed to create visual shape array",
-                code: visual_id,
-            });
-        }
-        Ok(visual_id)
-    }
-
-    pub fn create_multi_body(&mut self, options: &MultiBodyCreateOptions<'_>) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3CreateMultiBodyCommandInit(self.handle) };
-
-        let (base_position, base_orientation) =
-            isometry_to_raw_parts(&options.base.world_transform);
-        let (inertial_position, inertial_orientation) =
-            isometry_to_raw_parts(&options.base.inertial_transform);
-
-        unsafe {
-            ffi::b3CreateMultiBodyBase(
-                command,
-                options.base.mass,
-                options.base.collision_shape,
-                options.base.visual_shape,
-                base_position.as_ptr(),
-                base_orientation.as_ptr(),
-                inertial_position.as_ptr(),
-                inertial_orientation.as_ptr(),
-            );
-        }
-
-        for link in options.links {
-            let parent_index = match link.parent_index {
-                Some(index) => Self::usize_to_i32(index)?,
-                None => -1,
-            };
-
-            let (link_position, link_orientation) = isometry_to_raw_parts(&link.parent_transform);
-            let (link_inertial_position, link_inertial_orientation) =
-                isometry_to_raw_parts(&link.inertial_transform);
-
-            unsafe {
-                ffi::b3CreateMultiBodyLink(
-                    command,
-                    link.mass,
-                    link.collision_shape as f64,
-                    link.visual_shape as f64,
-                    link_position.as_ptr(),
-                    link_orientation.as_ptr(),
-                    link_inertial_position.as_ptr(),
-                    link_inertial_orientation.as_ptr(),
-                    parent_index,
-                    link.joint_type,
-                    link.joint_axis.as_ptr(),
-                );
-            }
-        }
-
-        if let Some(flags) = options.flags {
-            unsafe { ffi::b3CreateMultiBodySetFlags(command, flags) };
-        }
-        if options.use_maximal_coordinates {
-            unsafe { ffi::b3CreateMultiBodyUseMaximalCoordinates(command) };
-        }
-        let mut _batch_storage: Option<Vec<f64>> = None;
-        if let Some(batch) = options.batch_transforms {
-            let mut flattened = Self::flatten_isometries(batch);
-            unsafe {
-                ffi::b3CreateMultiBodySetBatchPositions(
-                    self.handle,
-                    command,
-                    flattened.as_mut_ptr(),
-                    batch.len() as i32,
-                );
-            }
-            _batch_storage = Some(flattened);
-        }
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CREATE_MULTI_BODY_COMPLETED,
-        )?;
-        let body_id = unsafe { ffi::b3GetStatusBodyIndex(status.handle) };
-        if body_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Bullet failed to create multibody",
-                code: body_id,
-            });
-        }
-        Ok(body_id)
-    }
-
-    pub fn create_constraint(&mut self, options: &ConstraintCreateOptions) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
-        let parent_link = match options.parent_link {
-            Some(index) => Self::usize_to_i32(index)?,
-            None => -1,
-        };
-        let child_link = match options.child_link {
-            Some(index) => Self::usize_to_i32(index)?,
-            None => -1,
-        };
-        let mut joint_info = ffi::b3JointInfo {
-            m_joint_type: options.joint_type,
-            m_joint_axis: options.joint_axis,
-            m_joint_max_force: options.max_applied_force,
-            ..Default::default()
-        };
-        Self::write_transform_to_frame(&options.parent_frame, &mut joint_info.m_parent_frame);
-        Self::write_transform_to_frame(&options.child_frame, &mut joint_info.m_child_frame);
-
-        let command = unsafe {
-            ffi::b3InitCreateUserConstraintCommand(
-                self.handle,
-                options.parent_body,
-                parent_link,
-                options.child_body,
-                child_link,
-                &mut joint_info,
-            )
-        };
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_USER_CONSTRAINT_COMPLETED,
-        )?;
-        let constraint_id = unsafe { ffi::b3GetStatusUserConstraintUniqueId(status.handle) };
-        if constraint_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Bullet failed to create user constraint",
-                code: constraint_id,
-            });
-        }
-
-        let update = ConstraintUpdate {
-            max_force: Some(options.max_applied_force),
-            gear_ratio: options.gear_ratio,
-            gear_aux_link: options.gear_aux_link,
-            relative_position_target: options.relative_position_target,
-            erp: options.erp,
-            ..Default::default()
-        };
-
-        if Self::constraint_update_has_changes(&update) {
-            self.change_constraint(constraint_id, &update)?;
-        }
-
-        Ok(constraint_id)
-    }
-
-    pub fn change_constraint(
-        &mut self,
-        constraint_id: i32,
-        update: &ConstraintUpdate,
-    ) -> BulletResult<()> {
-        if !Self::constraint_update_has_changes(update) {
-            return Ok(());
-        }
-
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitChangeUserConstraintCommand(self.handle, constraint_id) };
-
-        if let Some(frame) = update.child_frame.as_ref() {
-            let (pivot, orientation) = isometry_to_raw_parts(frame);
-            unsafe {
-                ffi::b3InitChangeUserConstraintSetPivotInB(command, pivot.as_ptr());
-                ffi::b3InitChangeUserConstraintSetFrameInB(command, orientation.as_ptr());
-            }
-        }
-        if let Some(force) = update.max_force {
-            unsafe { ffi::b3InitChangeUserConstraintSetMaxForce(command, force) };
-        }
-        if let Some(ratio) = update.gear_ratio {
-            unsafe { ffi::b3InitChangeUserConstraintSetGearRatio(command, ratio) };
-        }
-        if let Some(aux) = update.gear_aux_link {
-            let aux = Self::usize_to_i32(aux)?;
-            unsafe { ffi::b3InitChangeUserConstraintSetGearAuxLink(command, aux) };
-        }
-        if let Some(target) = update.relative_position_target {
-            unsafe { ffi::b3InitChangeUserConstraintSetRelativePositionTarget(command, target) };
-        }
-        if let Some(erp) = update.erp {
-            unsafe { ffi::b3InitChangeUserConstraintSetERP(command, erp) };
-        }
-
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CHANGE_USER_CONSTRAINT_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn remove_constraint(&mut self, constraint_id: i32) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitRemoveUserConstraintCommand(self.handle, constraint_id) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_USER_CONSTRAINT_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn enable_joint_force_torque_sensor(
-        &mut self,
-        body_unique_id: i32,
-        joint_index: i32,
-        enable: bool,
-    ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3CreateSensorCommandInit(self.handle, body_unique_id) };
-        unsafe {
-            ffi::b3CreateSensorEnable6DofJointForceTorqueSensor(
-                command,
-                joint_index,
-                if enable { 1 } else { 0 },
-            );
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn remove_body(&mut self, body_unique_id: i32) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitRemoveBodyCommand(self.handle, body_unique_id) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_BODY_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn get_num_constraints(&self) -> i32 {
-        unsafe { ffi::b3GetNumUserConstraints(self.handle) }
-    }
-
-    pub fn get_constraint_info(&self, constraint_id: i32) -> BulletResult<ConstraintInfo> {
-        let mut raw = MaybeUninit::<ffi::b3UserConstraint>::uninit();
-        let success =
-            unsafe { ffi::b3GetUserConstraintInfo(self.handle, constraint_id, raw.as_mut_ptr()) };
-        if success == 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Unable to query constraint info",
-                code: success,
-            });
-        }
-        let raw = unsafe { raw.assume_init() };
-        Ok(ConstraintInfo {
-            parent_body: raw.m_parentBodyIndex,
-            parent_link: raw.m_parentJointIndex,
-            child_body: raw.m_childBodyIndex,
-            child_link: raw.m_childJointIndex,
-            parent_frame: Self::read_frame_transform(&raw.m_parentFrame),
-            child_frame: Self::read_frame_transform(&raw.m_childFrame),
-            joint_axis: raw.m_jointAxis,
-            joint_type: raw.m_jointType,
-            max_applied_force: raw.m_maxAppliedForce,
-            constraint_unique_id: raw.m_userConstraintUniqueId,
-            gear_ratio: raw.m_gearRatio,
-            gear_aux_link: raw.m_gearAuxLink,
-            relative_position_target: raw.m_relativePositionTarget,
-            erp: raw.m_erp,
-        })
-    }
-
-    pub fn get_constraint_state(&mut self, constraint_id: i32) -> BulletResult<ConstraintState> {
-        self.ensure_can_submit()?;
-        let command =
-            unsafe { ffi::b3InitGetUserConstraintStateCommand(self.handle, constraint_id) };
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_USER_CONSTRAINT_REQUEST_STATE_COMPLETED,
-        )?;
-        let mut raw = MaybeUninit::<ffi::b3UserConstraintState>::uninit();
-        let success =
-            unsafe { ffi::b3GetStatusUserConstraintState(status.handle, raw.as_mut_ptr()) };
-        if success == 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Unable to read constraint state",
-                code: success,
-            });
-        }
-        let raw = unsafe { raw.assume_init() };
-        Ok(ConstraintState {
-            applied_forces: raw.m_appliedConstraintForces,
-            dof_count: raw.m_numDofs,
-        })
-    }
-
-    pub fn get_constraint_unique_id(&self, index: i32) -> Option<i32> {
-        let id = unsafe { ffi::b3GetUserConstraintId(self.handle, index) };
-        if id < 0 { None } else { Some(id) }
-    }
-
-    pub fn change_visual_shape(
-        &mut self,
-        body_unique_id: i32,
-        link_index: i32,
-        options: &ChangeVisualShapeOptions,
-    ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let shape_index = options.shape_index.unwrap_or(-1);
-        let command = unsafe {
-            ffi::b3InitUpdateVisualShape2(self.handle, body_unique_id, link_index, shape_index)
-        };
-
-        if let Some(texture_id) = options.texture_unique_id {
-            unsafe { ffi::b3UpdateVisualShapeTexture(command, texture_id) };
-        }
-        if let Some(rgba) = options.rgba_color {
-            unsafe { ffi::b3UpdateVisualShapeRGBAColor(command, rgba.as_ptr()) };
-        }
-        if let Some(flags) = options.flags {
-            unsafe { ffi::b3UpdateVisualShapeFlags(command, flags) };
-        }
-        if let Some(specular) = options.specular_color {
-            unsafe { ffi::b3UpdateVisualShapeSpecularColor(command, specular.as_ptr()) };
-        }
-
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn load_texture(&mut self, filename: &str) -> BulletResult<TextureInfo> {
-        self.ensure_can_submit()?;
-        let filename_c = CString::new(filename)?;
-        let command = unsafe { ffi::b3InitLoadTexture(self.handle, filename_c.as_ptr()) };
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_LOAD_TEXTURE_COMPLETED,
-        )?;
-        let texture_id = unsafe { ffi::b3GetStatusTextureUniqueId(status.handle) };
-        if texture_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Bullet failed to load texture",
-                code: texture_id,
-            });
-        }
-        Ok(TextureInfo {
-            texture_unique_id: texture_id,
-        })
-    }
-
-    pub fn change_texture(&mut self, texture_id: i32, data: &TextureData<'_>) -> BulletResult<()> {
-        if data.width <= 0 || data.height <= 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Texture dimensions must be positive",
-                code: -1,
-            });
-        }
-
-        let expected_len = (data.width as usize)
-            .saturating_mul(data.height as usize)
-            .saturating_mul(3);
-        if expected_len != data.rgb_pixels.len() {
-            return Err(BulletError::CommandFailed {
-                message: "Texture data length mismatch",
-                code: data.rgb_pixels.len() as i32,
-            });
-        }
-
-        self.ensure_can_submit()?;
-        let command = unsafe {
-            ffi::b3CreateChangeTextureCommandInit(
-                self.handle,
-                texture_id,
-                data.width,
-                data.height,
-                data.rgb_pixels.as_ptr().cast(),
-            )
-        };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-}
-
-/// ! =====================================================================================================================================
-/// ### Bodies, Joints & Base State
-///
-/// | API | Status | Notes |
-/// | --- | --- | --- |
-/// | getNumBodies | **Implemented** | Enumeration helper |
-/// | getBodyUniqueId | **Implemented** | Enumeration helper |
-/// | getBodyInfo | **Implemented** | Names cached |
-/// | computeDofCount | **Implemented** | Useful with dynamics |
-/// | syncBodyInfo | **Implemented** | Multi-client support |
-/// | syncUserData | **Implemented** | Multi-client support |
-/// | addUserData | **Implemented** | User data authoring |
-/// | getUserData | **Implemented** | User data query |
-/// | removeUserData | **Implemented** | User data cleanup |
-/// | getUserDataId | **Implemented** | User data query |
-/// | getNumUserData | **Implemented** | User data query |
-/// | getUserDataInfo | **Implemented** | User data query |
-/// | getBasePositionAndOrientation | **Implemented** | Uses actual state request |
-/// | getAABB | **Implemented** | Contact bounds |
-/// | resetBasePositionAndOrientation | **Implemented** | World authoring priority |
-/// | unsupportedChangeScaling | Optional | Rudimentary scaling |
-/// | getBaseVelocity | **Implemented** | Uses actual state request |
-/// | resetBaseVelocity | **Implemented** | Dynamics priority |
-/// | getNumJoints | **Implemented** | Joint enumeration |
-/// | getJointInfo | **Implemented** | Joint metadata |
-/// | getJointState | **Implemented** | Single joint sensor |
-/// | getJointStates | **Implemented** | Batch sensor support |
-/// | getJointStateMultiDof | **Implemented** | Multi-DoF sensor |
-/// | getJointStatesMultiDof | **Implemented** | Multi-DoF batch |
-/// | getLinkState | **Implemented** | Forward kinematics |
-/// | getLinkStates | **Implemented** | Batch link state |
-/// | resetJointState | **Implemented** | World authoring priority |
-/// | resetJointStateMultiDof | **Implemented** | Multi-DoF reset |
-/// | resetJointStatesMultiDof | **Implemented** | Multi-DoF batch reset |
-impl PhysicsClient {
-    pub fn compute_dof_count(&self, body_unique_id: i32) -> i32 {
-        unsafe { ffi::b3ComputeDofCount(self.handle, body_unique_id) }
-    }
-
-    pub fn sync_body_info(&mut self) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitSyncBodyInfoCommand(self.handle) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_SYNC_BODY_INFO_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn sync_user_data(&mut self, body_unique_ids: Option<&[i32]>) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitSyncUserDataCommand(self.handle) };
-        if let Some(ids) = body_unique_ids {
-            for &id in ids {
-                unsafe {
-                    ffi::b3AddBodyToSyncUserDataRequest(command, id);
-                }
-            }
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_SYNC_USER_DATA_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn add_user_data(
-        &mut self,
-        body_unique_id: i32,
-        key: &str,
-        value: &str,
-        options: UserDataLookupOptions,
-    ) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
-        let key_c = CString::new(key)?;
-        let value_c = CString::new(value)?;
-        let link_index = options.link_index.unwrap_or(-1);
-        let visual_shape_index = options.visual_shape_index.unwrap_or(-1);
-        let value_len = i32::try_from(value_c.as_bytes_with_nul().len()).map_err(|_| {
-            BulletError::CommandFailed {
-                message: "User data value is too long",
-                code: -1,
-            }
-        })?;
-
-        let command = unsafe {
-            ffi::b3InitAddUserDataCommand(
-                self.handle,
-                body_unique_id,
-                link_index,
-                visual_shape_index,
-                key_c.as_ptr(),
-                ffi::USER_DATA_VALUE_TYPE_STRING,
-                value_len,
-                value_c.as_ptr().cast(),
-            )
-        };
-
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_ADD_USER_DATA_COMPLETED,
-        )?;
-        let user_data_id = unsafe { ffi::b3GetUserDataIdFromStatus(status.handle) };
-        Ok(user_data_id)
-    }
-
-    pub fn remove_user_data(&mut self, user_data_id: i32) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitRemoveUserDataCommand(self.handle, user_data_id) };
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_REMOVE_USER_DATA_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn get_user_data_id(
-        &self,
-        body_unique_id: i32,
-        key: &str,
-        options: UserDataLookupOptions,
-    ) -> BulletResult<Option<i32>> {
-        let key_c = CString::new(key)?;
-        let link_index = options.link_index.unwrap_or(-1);
-        let visual_shape_index = options.visual_shape_index.unwrap_or(-1);
-        let id = unsafe {
-            ffi::b3GetUserDataId(
-                self.handle,
-                body_unique_id,
-                link_index,
-                visual_shape_index,
-                key_c.as_ptr(),
-            )
-        };
-        if id < 0 { Ok(None) } else { Ok(Some(id)) }
-    }
-
-    pub fn get_user_data(&self, user_data_id: i32) -> BulletResult<Option<String>> {
-        let mut raw = MaybeUninit::<ffi::b3UserDataValue>::uninit();
-        let success = unsafe { ffi::b3GetUserData(self.handle, user_data_id, raw.as_mut_ptr()) };
-        if success == 0 {
-            return Ok(None);
-        }
-        let raw = unsafe { raw.assume_init() };
-        if raw.m_type != ffi::USER_DATA_VALUE_TYPE_STRING {
-            return Err(BulletError::CommandFailed {
-                message: "User data value has unsupported type",
-                code: raw.m_type,
-            });
-        }
-        if raw.m_data1.is_null() {
-            return Ok(None);
-        }
-        let value = unsafe { CStr::from_ptr(raw.m_data1) };
-        Ok(Some(value.to_string_lossy().into_owned()))
-    }
-
-    pub fn get_num_user_data(&self, body_unique_id: i32) -> BulletResult<i32> {
-        let count = unsafe { ffi::b3GetNumUserData(self.handle, body_unique_id) };
-        if count < 0 {
-            Err(BulletError::CommandFailed {
-                message: "Failed to query user data count",
-                code: count,
-            })
-        } else {
-            Ok(count)
-        }
-    }
-
-    pub fn get_user_data_info(
-        &self,
-        body_unique_id: i32,
-        user_data_index: i32,
-    ) -> BulletResult<UserDataInfo> {
-        let mut key_ptr: *const i8 = ptr::null();
-        let mut user_data_id = -1;
-        let mut link_index = -1;
-        let mut visual_shape_index = -1;
-        unsafe {
-            ffi::b3GetUserDataInfo(
-                self.handle,
-                body_unique_id,
-                user_data_index,
-                &mut key_ptr,
-                &mut user_data_id,
-                &mut link_index,
-                &mut visual_shape_index,
-            );
-        }
-
-        if key_ptr.is_null() || user_data_id == -1 {
-            return Err(BulletError::CommandFailed {
-                message: "Could not fetch user data info",
-                code: -1,
-            });
-        }
-
-        let key = unsafe { CStr::from_ptr(key_ptr) }
-            .to_string_lossy()
-            .into_owned();
-
-        Ok(UserDataInfo {
-            user_data_id,
-            key,
-            body_unique_id,
-            link_index,
-            visual_shape_index,
-        })
-    }
-
-    pub fn get_aabb(&mut self, body_unique_id: i32, link_index: i32) -> BulletResult<Aabb> {
-        if body_unique_id < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Invalid body id",
-                code: body_unique_id,
-            });
-        }
-        if link_index < -1 {
-            return Err(BulletError::CommandFailed {
-                message: "Invalid link index",
-                code: link_index,
-            });
-        }
-        self.ensure_can_submit()?;
-        let command =
-            unsafe { ffi::b3RequestCollisionInfoCommandInit(self.handle, body_unique_id) };
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_COLLISION_INFO_COMPLETED,
-        )?;
-
-        let mut aabb_min = [0.0; 3];
-        let mut aabb_max = [0.0; 3];
-        let success = unsafe {
-            ffi::b3GetStatusAABB(
-                status.handle,
-                link_index,
-                aabb_min.as_mut_ptr(),
-                aabb_max.as_mut_ptr(),
-            )
-        };
-        if success == 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Failed to fetch AABB",
-                code: success,
-            });
-        }
-
-        Ok(Aabb {
-            min: aabb_min,
-            max: aabb_max,
-        })
-    }
-
-    pub fn reset_base_position_and_orientation(
-        &mut self,
-        body_unique_id: i32,
-        position: [f64; 3],
-        orientation: [f64; 4],
-    ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
-        unsafe {
-            ffi::b3CreatePoseCommandSetBasePosition(command, position[0], position[1], position[2]);
-            ffi::b3CreatePoseCommandSetBaseOrientation(
-                command,
-                orientation[0],
-                orientation[1],
-                orientation[2],
-                orientation[3],
-            );
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn reset_base_velocity(
-        &mut self,
-        body_unique_id: i32,
-        linear_velocity: Option<[f64; 3]>,
-        angular_velocity: Option<[f64; 3]>,
-    ) -> BulletResult<()> {
-        if linear_velocity.is_none() && angular_velocity.is_none() {
-            return Err(BulletError::CommandFailed {
-                message: "Expected linear and/or angular velocity",
-                code: -1,
-            });
-        }
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
-        if let Some(vel) = linear_velocity {
-            unsafe {
-                ffi::b3CreatePoseCommandSetBaseLinearVelocity(command, vel.as_ptr());
-            }
-        }
-        if let Some(vel) = angular_velocity {
-            unsafe {
-                ffi::b3CreatePoseCommandSetBaseAngularVelocity(command, vel.as_ptr());
-            }
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn get_num_bodies(&self) -> i32 {
-        unsafe { ffi::b3GetNumBodies(self.handle) }
-    }
-
-    pub fn get_body_unique_id(&self, serial_index: i32) -> i32 {
-        unsafe { ffi::b3GetBodyUniqueId(self.handle, serial_index) }
-    }
-
-    pub fn get_body_info(&self, body_unique_id: i32) -> BulletResult<BodyInfo> {
-        let mut raw = MaybeUninit::<ffi::b3BodyInfo>::uninit();
-        let result = unsafe { ffi::b3GetBodyInfo(self.handle, body_unique_id, raw.as_mut_ptr()) };
-        if result == 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Cannot query body info",
-                code: result,
-            });
-        }
-        let raw = unsafe { raw.assume_init() };
-        let base_name = unsafe { CStr::from_ptr(raw.m_baseName.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        let body_name = unsafe { CStr::from_ptr(raw.m_bodyName.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        Ok(BodyInfo {
-            base_name,
-            body_name,
-        })
-    }
-
-    pub fn get_num_joints(&self, body_unique_id: i32) -> i32 {
-        unsafe { ffi::b3GetNumJoints(self.handle, body_unique_id) }
-    }
-
-    pub fn get_joint_info(&self, body_unique_id: i32, joint_index: i32) -> BulletResult<JointInfo> {
-        let mut raw = MaybeUninit::<ffi::b3JointInfo>::uninit();
-        let success = unsafe {
-            ffi::b3GetJointInfo(self.handle, body_unique_id, joint_index, raw.as_mut_ptr())
-        };
-        if success == 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Cannot query joint info",
-                code: success,
-            });
-        }
-        let raw = unsafe { raw.assume_init() };
-        Ok(JointInfo {
-            joint_index: raw.m_joint_index,
-            joint_name: Self::read_c_string(&raw.m_joint_name),
-            joint_type: raw.m_joint_type,
-            q_index: raw.m_q_index,
-            u_index: raw.m_u_index,
-            q_size: raw.m_q_size,
-            u_size: raw.m_u_size,
-            flags: raw.m_flags,
-            damping: raw.m_joint_damping,
-            friction: raw.m_joint_friction,
-            lower_limit: raw.m_joint_lower_limit,
-            upper_limit: raw.m_joint_upper_limit,
-            max_force: raw.m_joint_max_force,
-            max_velocity: raw.m_joint_max_velocity,
-            link_name: Self::read_c_string(&raw.m_link_name),
-            joint_axis: raw.m_joint_axis,
-            parent_frame_pos: [
-                raw.m_parent_frame[0],
-                raw.m_parent_frame[1],
-                raw.m_parent_frame[2],
-            ],
-            parent_frame_orn: [
-                raw.m_parent_frame[3],
-                raw.m_parent_frame[4],
-                raw.m_parent_frame[5],
-                raw.m_parent_frame[6],
-            ],
-            parent_index: raw.m_parent_index,
-        })
-    }
-
-    pub fn get_joint_state(
-        &mut self,
-        body_unique_id: i32,
-        joint_index: i32,
-    ) -> BulletResult<JointState> {
-        let status = self.request_actual_state_status(body_unique_id)?;
-        self.read_joint_state(status.handle, joint_index)
-    }
-
-    pub fn get_joint_states(
-        &mut self,
-        body_unique_id: i32,
-        joint_indices: &[i32],
-    ) -> BulletResult<Vec<JointState>> {
-        if joint_indices.is_empty() {
-            return Ok(Vec::new());
-        }
-        let status = self.request_actual_state_status(body_unique_id)?;
-        joint_indices
-            .iter()
-            .map(|&index| self.read_joint_state(status.handle, index))
-            .collect()
-    }
-
-    pub fn get_joint_state_multi_dof(
-        &mut self,
-        body_unique_id: i32,
-        joint_index: i32,
-    ) -> BulletResult<JointStateMultiDof> {
-        let status = self.request_actual_state_status(body_unique_id)?;
-        self.read_joint_state_multi_dof(status.handle, joint_index)
-    }
-
-    pub fn get_joint_states_multi_dof(
-        &mut self,
-        body_unique_id: i32,
-        joint_indices: &[i32],
-    ) -> BulletResult<Vec<JointStateMultiDof>> {
-        if joint_indices.is_empty() {
-            return Ok(Vec::new());
-        }
-        let status = self.request_actual_state_status(body_unique_id)?;
-        joint_indices
-            .iter()
-            .map(|&index| self.read_joint_state_multi_dof(status.handle, index))
-            .collect()
-    }
-
-    pub fn get_base_position_and_orientation(
-        &mut self,
-        body_unique_id: i32,
-    ) -> BulletResult<BaseState> {
-        let status = self.request_actual_state_status(body_unique_id)?;
-        let (base, _) = Self::extract_base_state(status.handle)?;
-        Ok(base)
-    }
-
-    pub fn get_base_velocity(&mut self, body_unique_id: i32) -> BulletResult<BaseVelocity> {
-        let status = self.request_actual_state_status(body_unique_id)?;
-        let (_, velocity) = Self::extract_base_state(status.handle)?;
-        Ok(velocity)
-    }
-
-    pub fn get_link_state(
-        &mut self,
-        body_unique_id: i32,
-        link_index: i32,
-        options: LinkStateOptions,
-    ) -> BulletResult<LinkState> {
-        let status = self.request_actual_state_status_with_flags(
-            body_unique_id,
-            options.compute_link_velocity,
-            options.compute_forward_kinematics,
-        )?;
-        self.read_link_state(status.handle, link_index, options)
-    }
-
-    pub fn get_link_states(
-        &mut self,
-        body_unique_id: i32,
-        link_indices: &[i32],
-        options: LinkStateOptions,
-    ) -> BulletResult<Vec<LinkState>> {
-        if link_indices.is_empty() {
-            return Ok(Vec::new());
-        }
-        let status = self.request_actual_state_status_with_flags(
-            body_unique_id,
-            options.compute_link_velocity,
-            options.compute_forward_kinematics,
-        )?;
-        link_indices
-            .iter()
-            .map(|&index| self.read_link_state(status.handle, index, options))
-            .collect()
-    }
-
-    pub fn reset_joint_state(
-        &mut self,
-        body_unique_id: i32,
-        joint_index: i32,
-        target_position: f64,
-        target_velocity: Option<f64>,
-    ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
-        unsafe {
-            ffi::b3CreatePoseCommandSetJointPosition(
-                self.handle,
-                command,
-                joint_index,
-                target_position,
-            );
-            ffi::b3CreatePoseCommandSetJointVelocity(
-                self.handle,
-                command,
-                joint_index,
-                target_velocity.unwrap_or(0.0),
-            );
-        }
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn reset_joint_state_multi_dof(
-        &mut self,
-        body_unique_id: i32,
-        joint_index: i32,
-        positions: Option<&[f64]>,
-        velocities: Option<&[f64]>,
-    ) -> BulletResult<()> {
-        let target = MultiDofTarget {
-            joint_index,
-            positions,
-            velocities,
-        };
-        self.reset_joint_states_multi_dof(body_unique_id, slice::from_ref(&target))
-    }
-
-    pub fn reset_joint_states_multi_dof(
-        &mut self,
-        body_unique_id: i32,
-        targets: &[MultiDofTarget<'_>],
-    ) -> BulletResult<()> {
-        if targets.is_empty() {
-            return Ok(());
-        }
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3CreatePoseCommandInit(self.handle, body_unique_id) };
-
-        for target in targets {
-            let mut position_buf = [0.0_f64; 4];
-            let mut velocity_buf = [0.0_f64; 3];
-            let mut position_size = 0_i32;
-            let mut velocity_size = 0_i32;
-
-            if let Some(positions) = target.positions {
-                if positions.len() > position_buf.len() {
-                    return Err(BulletError::CommandFailed {
-                        message: "Position vector too large for multi-DoF joint",
-                        code: positions.len() as i32,
-                    });
-                }
-                if !positions.is_empty() {
-                    position_buf[..positions.len()].copy_from_slice(positions);
-                    position_size = positions.len() as i32;
-                }
-            }
-
-            if let Some(velocities) = target.velocities {
-                if velocities.len() > velocity_buf.len() {
-                    return Err(BulletError::CommandFailed {
-                        message: "Velocity vector too large for multi-DoF joint",
-                        code: velocities.len() as i32,
-                    });
-                }
-                if !velocities.is_empty() {
-                    velocity_buf[..velocities.len()].copy_from_slice(velocities);
-                    velocity_size = velocities.len() as i32;
-                }
-            }
-
-            if position_size == 0 && velocity_size == 0 {
-                return Err(BulletError::CommandFailed {
-                    message: "Expected position and/or velocity data for multi-DoF joint",
-                    code: target.joint_index,
-                });
-            }
-
-            if position_size > 0 {
-                unsafe {
-                    ffi::b3CreatePoseCommandSetJointPositionMultiDof(
-                        self.handle,
-                        command,
-                        target.joint_index,
-                        position_buf.as_ptr(),
-                        position_size,
-                    );
-                }
-            }
-
-            if velocity_size > 0 {
-                unsafe {
-                    ffi::b3CreatePoseCommandSetJointVelocityMultiDof(
-                        self.handle,
-                        command,
-                        target.joint_index,
-                        velocity_buf.as_ptr(),
-                        velocity_size,
-                    );
-                }
-            }
-        }
-
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-}
-
-/// ! =====================================================================================================================================
-/// ### Dynamics & Control
-///
-/// | API | Status | Notes |
-/// | --- | --- | --- |
-/// | changeDynamics | **Implemented** | Mutation wrapper |
-/// | getDynamicsInfo | **Implemented** | Mirrors Bullet query |
-/// | setJointMotorControl | Optional | Legacy single-call (deprecated) |
-/// | setJointMotorControl2 | **Implemented** | Primary motor control path |
-/// | setJointMotorControlMultiDof | **Implemented** | Multi-DoF control |
-/// | setJointMotorControlMultiDofArray | **Implemented** | Multi-DoF batch control |
-/// | setJointMotorControlArray | **Implemented** | Batch joint control |
-/// | applyExternalForce | **Implemented** | Core dynamics action |
-/// | applyExternalTorque | **Implemented** | Core dynamics action |
-/// | calculateInverseDynamics | **Implemented** | Advanced dynamics |
-/// | calculateJacobian | **Implemented** | Advanced dynamics |
-/// | calculateMassMatrix | **Implemented** | Advanced dynamics |
-/// | calculateInverseKinematics | **Implemented** | Depends on jacobians |
-/// | calculateInverseKinematics2 | **Implemented** | Multi-end-effector variant |
-impl PhysicsClient {
-    pub fn change_dynamics(
-        &mut self,
-        body_unique_id: i32,
-        link_index: i32,
-        update: &DynamicsUpdate,
-    ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let command = unsafe { ffi::b3InitChangeDynamicsInfo(self.handle) };
-
-        unsafe {
-            if let Some(mass) = update.mass {
-                ffi::b3ChangeDynamicsInfoSetMass(command, body_unique_id, link_index, mass);
-            }
-            if let Some(local_inertia) = update.local_inertia_diagonal {
-                ffi::b3ChangeDynamicsInfoSetLocalInertiaDiagonal(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    local_inertia.as_ptr(),
-                );
-            }
-            if let Some(anisotropic) = update.anisotropic_friction {
-                ffi::b3ChangeDynamicsInfoSetAnisotropicFriction(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    anisotropic.as_ptr(),
-                );
-            }
-            if let Some((lower, upper)) = update.joint_limit {
-                ffi::b3ChangeDynamicsInfoSetJointLimit(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    lower,
-                    upper,
-                );
-            }
-            if let Some(limit_force) = update.joint_limit_force {
-                ffi::b3ChangeDynamicsInfoSetJointLimitForce(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    limit_force,
-                );
-            }
-            if let Some(dynamic_type) = update.dynamic_type {
-                ffi::b3ChangeDynamicsInfoSetDynamicType(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    dynamic_type,
-                );
-            }
-            if let Some(lateral) = update.lateral_friction {
-                ffi::b3ChangeDynamicsInfoSetLateralFriction(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    lateral,
-                );
-            }
-            if let Some(spinning) = update.spinning_friction {
-                ffi::b3ChangeDynamicsInfoSetSpinningFriction(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    spinning,
-                );
-            }
-            if let Some(rolling) = update.rolling_friction {
-                ffi::b3ChangeDynamicsInfoSetRollingFriction(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    rolling,
-                );
-            }
-            if let Some(restitution) = update.restitution {
-                ffi::b3ChangeDynamicsInfoSetRestitution(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    restitution,
-                );
-            }
-            if let Some(linear_damping) = update.linear_damping {
-                ffi::b3ChangeDynamicsInfoSetLinearDamping(command, body_unique_id, linear_damping);
-            }
-            if let Some(angular_damping) = update.angular_damping {
-                ffi::b3ChangeDynamicsInfoSetAngularDamping(
-                    command,
-                    body_unique_id,
-                    angular_damping,
-                );
-            }
-            if let Some(joint_damping) = update.joint_damping {
-                ffi::b3ChangeDynamicsInfoSetJointDamping(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    joint_damping,
-                );
-            }
-            if let Some((stiffness, damping)) = update.contact_stiffness_and_damping {
-                ffi::b3ChangeDynamicsInfoSetContactStiffnessAndDamping(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    stiffness,
-                    damping,
-                );
-            }
-            if let Some(anchor) = update.friction_anchor {
-                ffi::b3ChangeDynamicsInfoSetFrictionAnchor(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    anchor as i32,
-                );
-            }
-            if let Some(radius) = update.ccd_swept_sphere_radius {
-                ffi::b3ChangeDynamicsInfoSetCcdSweptSphereRadius(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    radius,
-                );
-            }
-            if let Some(threshold) = update.contact_processing_threshold {
-                ffi::b3ChangeDynamicsInfoSetContactProcessingThreshold(
-                    command,
-                    body_unique_id,
-                    link_index,
-                    threshold,
-                );
-            }
-            if let Some(state) = update.activation_state {
-                ffi::b3ChangeDynamicsInfoSetActivationState(command, body_unique_id, state);
-            }
-            if let Some(max_velocity) = update.max_joint_velocity {
-                ffi::b3ChangeDynamicsInfoSetMaxJointVelocity(command, body_unique_id, max_velocity);
-            }
-            if let Some(collision_margin) = update.collision_margin {
-                ffi::b3ChangeDynamicsInfoSetCollisionMargin(
-                    command,
-                    body_unique_id,
-                    collision_margin,
-                );
-            }
-        }
-
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
-
-    pub fn get_dynamics_info(
-        &mut self,
-        body_unique_id: i32,
-        link_index: i32,
-    ) -> BulletResult<DynamicsInfo> {
-        self.ensure_can_submit()?;
-        let command =
-            unsafe { ffi::b3GetDynamicsInfoCommandInit(self.handle, body_unique_id, link_index) };
-        let status = self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_GET_DYNAMICS_INFO_COMPLETED,
-        )?;
-
-        let mut info = MaybeUninit::<ffi::b3DynamicsInfo>::uninit();
-        let success = unsafe { ffi::b3GetDynamicsInfo(status.handle, info.as_mut_ptr()) };
-        if success == 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Failed to retrieve dynamics info",
-                code: success,
-            });
-        }
-        let info = unsafe { info.assume_init() };
-        Ok(DynamicsInfo {
-            mass: info.m_mass,
-            lateral_friction: info.m_lateralFrictionCoeff,
-            local_inertia_diagonal: info.m_localInertialDiagonal,
-            local_inertia_position: [
-                info.m_localInertialFrame[0],
-                info.m_localInertialFrame[1],
-                info.m_localInertialFrame[2],
-            ],
-            local_inertia_orientation: [
-                info.m_localInertialFrame[3],
-                info.m_localInertialFrame[4],
-                info.m_localInertialFrame[5],
-                info.m_localInertialFrame[6],
-            ],
-            restitution: info.m_restitution,
-            rolling_friction: info.m_rollingFrictionCoeff,
-            spinning_friction: info.m_spinningFrictionCoeff,
-            contact_damping: info.m_contactDamping,
-            contact_stiffness: info.m_contactStiffness,
-            body_type: info.m_bodyType,
-            collision_margin: info.m_collisionMargin,
-            angular_damping: info.m_angularDamping,
-            linear_damping: info.m_linearDamping,
-            ccd_swept_sphere_radius: info.m_ccdSweptSphereRadius,
-            contact_processing_threshold: info.m_contactProcessingThreshold,
-            activation_state: info.m_activationState,
-            friction_anchor: info.m_frictionAnchor != 0,
-            dynamic_type: info.m_dynamicType,
-        })
-    }
-
-    pub fn set_joint_motor_control(
-        &mut self,
-        body_unique_id: i32,
-        joint_index: i32,
-        control_mode: JointControlMode,
-        target_value: f64,
-        max_force: Option<f64>,
-        gain: Option<f64>,
-    ) -> BulletResult<()> {
-        let mut options = JointMotorControl2Options {
-            joint_index,
-            control_mode,
-            ..Default::default()
-        };
-
-        match control_mode {
-            JointControlMode::Velocity => {
-                options.target_velocity = Some(target_value);
-                options.velocity_gain = gain;
-                options.force = max_force;
-            }
-            JointControlMode::Torque => {
-                options.force = Some(target_value);
-            }
-            _ => {
-                options.target_position = Some(target_value);
-                options.position_gain = gain;
-                options.force = max_force;
-            }
-        }
-
-        self.set_joint_motor_control2(body_unique_id, &options)
-    }
-
-    pub fn set_joint_motor_control2(
-        &mut self,
-        body_unique_id: i32,
-        options: &JointMotorControl2Options,
-    ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
-        let joint_info = self.get_joint_info(body_unique_id, options.joint_index)?;
-        let command = unsafe {
-            ffi::b3JointControlCommandInit2(
-                self.handle,
-                body_unique_id,
-                options.control_mode.as_raw(),
-            )
-        };
-
-        let u_index = joint_info.u_index;
-        if u_index < 0 {
-            return Err(BulletError::CommandFailed {
-                message: "Joint has no velocity DOF for motor control",
-                code: u_index,
-            });
-        }
-
-        unsafe {
-            if let Some(max_velocity) = options.max_velocity {
-                ffi::b3JointControlSetMaximumVelocity(command, u_index, max_velocity);
-            }
-        }
-
-        match options.control_mode {
-            mode if mode.is_velocity_based() => {
-                let target_velocity = options.target_velocity.unwrap_or(0.0);
-                unsafe {
-                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
-                    ffi::b3JointControlSetKd(
-                        command,
-                        u_index,
-                        options.velocity_gain.unwrap_or(1.0),
-                    );
-                    ffi::b3JointControlSetMaximumForce(
-                        command,
-                        u_index,
-                        options.force.unwrap_or(joint_info.max_force),
-                    );
-                }
-            }
-            mode if mode.is_torque_based() => unsafe {
-                ffi::b3JointControlSetDesiredForceTorque(
-                    command,
-                    u_index,
-                    options.force.unwrap_or(0.0),
-                );
-            },
-            _ => {
-                if joint_info.q_index < 0 {
-                    return Err(BulletError::CommandFailed {
-                        message: "Joint has no position DOF for position control",
-                        code: joint_info.q_index,
-                    });
-                }
-                let target_position = options.target_position.unwrap_or(0.0);
-                let target_velocity = options.target_velocity.unwrap_or(0.0);
-                unsafe {
-                    ffi::b3JointControlSetDesiredPosition(
-                        command,
-                        joint_info.q_index,
-                        target_position,
-                    );
-                    ffi::b3JointControlSetKp(
-                        command,
-                        u_index,
-                        options.position_gain.unwrap_or(0.1),
-                    );
-                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
-                    ffi::b3JointControlSetKd(
-                        command,
-                        u_index,
-                        options.velocity_gain.unwrap_or(1.0),
-                    );
-                    ffi::b3JointControlSetMaximumForce(
-                        command,
-                        u_index,
-                        options.force.unwrap_or(joint_info.max_force),
-                    );
-                }
-            }
-        }
-
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
-        Ok(())
-    }
 }
 
 /// ! =====================================================================================================================================
@@ -3173,7 +3239,7 @@ impl PhysicsClient {
         link_a: i32,
         link_b: i32,
         enable_collision: bool,
-    ) -> BulletResult<()> {
+    ) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3CollisionFilterCommandInit(self.handle) };
         unsafe {
@@ -3190,7 +3256,7 @@ impl PhysicsClient {
             command,
             ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
         )?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn set_collision_filter_group_mask(
@@ -3199,7 +3265,7 @@ impl PhysicsClient {
         link_index: i32,
         collision_filter_group: i32,
         collision_filter_mask: i32,
-    ) -> BulletResult<()> {
+    ) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3CollisionFilterCommandInit(self.handle) };
         unsafe {
@@ -3215,7 +3281,7 @@ impl PhysicsClient {
             command,
             ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
         )?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn ray_test(
@@ -3665,12 +3731,7 @@ impl PhysicsClient {
         }
         let count = data.m_numKeyboardEvents as usize;
         let raw = unsafe { slice::from_raw_parts(data.m_keyboardEvents, count) };
-        raw.iter()
-            .map(|event| KeyboardEvent {
-                key_code: event.m_keyCode,
-                key_state: event.m_keyState,
-            })
-            .collect()
+        raw.iter().copied().map(Into::into).collect()
     }
 
     fn collect_mouse_events(data: &ffi::b3MouseEventsData) -> Vec<MouseEvent> {
@@ -3679,15 +3740,7 @@ impl PhysicsClient {
         }
         let count = data.m_numMouseEvents as usize;
         let raw = unsafe { slice::from_raw_parts(data.m_mouseEvents, count) };
-        raw.iter()
-            .map(|event| MouseEvent {
-                event_type: event.m_eventType,
-                mouse_pos_x: event.m_mousePosX,
-                mouse_pos_y: event.m_mousePosY,
-                button_index: event.m_buttonIndex,
-                button_state: event.m_buttonState,
-            })
-            .collect()
+        raw.iter().copied().map(Into::into).collect()
     }
 
     fn collect_visual_shapes(info: &ffi::b3VisualShapeInformation) -> Vec<VisualShapeData> {
@@ -4129,7 +4182,7 @@ impl PhysicsClient {
         object_unique_id: i32,
         link_index: i32,
         color: Option<[f64; 3]>,
-    ) -> BulletResult<()> {
+    ) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitDebugDrawingCommand(self.handle) };
         unsafe {
@@ -4140,7 +4193,7 @@ impl PhysicsClient {
             }
         }
         let _ = self.submit_command(command)?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn get_debug_visualizer_camera(&mut self) -> BulletResult<DebugVisualizerCamera> {
@@ -4175,52 +4228,46 @@ impl PhysicsClient {
 
     pub fn configure_debug_visualizer(
         &mut self,
-        options: &ConfigureDebugVisualizerOptions,
-    ) -> BulletResult<()> {
+        options: &DebugVisualizerOptions,
+    ) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitConfigureOpenGLVisualizer(self.handle) };
 
-        if let Some(flag) = options.flag {
-            let enabled = options.enable.unwrap_or(true) as i32;
-            unsafe {
-                ffi::b3ConfigureOpenGLVisualizerSetVisualizationFlags(command, flag, enabled)
-            };
-        }
-        if let Some(mut position) = options.light_position {
-            unsafe {
-                ffi::b3ConfigureOpenGLVisualizerSetLightPosition(command, position.as_mut_ptr())
-            };
-        }
-        if let Some(resolution) = options.shadow_map_resolution
-            && resolution > 0
-        {
-            unsafe { ffi::b3ConfigureOpenGLVisualizerSetShadowMapResolution(command, resolution) };
-        }
-        if let Some(world_size) = options.shadow_map_world_size
-            && world_size > 0
-        {
-            unsafe { ffi::b3ConfigureOpenGLVisualizerSetShadowMapWorldSize(command, world_size) };
-        }
-        if let Some(interval) = options.remote_sync_transform_interval
-            && interval >= 0.0
-        {
-            unsafe {
-                ffi::b3ConfigureOpenGLVisualizerSetRemoteSyncTransformInterval(command, interval)
-            };
-        }
-        if let Some(intensity) = options.shadow_map_intensity
-            && intensity >= 0.0
-        {
-            unsafe { ffi::b3ConfigureOpenGLVisualizerSetShadowMapIntensity(command, intensity) };
-        }
-        if let Some(mut rgb) = options.rgb_background {
-            unsafe {
-                ffi::b3ConfigureOpenGLVisualizerSetLightRgbBackground(command, rgb.as_mut_ptr())
-            };
+        match options {
+            DebugVisualizerOptions::Flag(flag, enabled) => unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetVisualizationFlags(
+                    command,
+                    *flag as i32,
+                    *enabled as i32,
+                );
+            },
+            DebugVisualizerOptions::LightPosition(position) => unsafe {
+                let mut pos_copy = *position;
+                ffi::b3ConfigureOpenGLVisualizerSetLightPosition(command, pos_copy.as_mut_ptr());
+            },
+            DebugVisualizerOptions::ShadowMapResolution(resolution) => unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetShadowMapResolution(command, *resolution);
+            },
+            DebugVisualizerOptions::ShadowMapWorldSize(world_size) => unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetShadowMapWorldSize(command, *world_size);
+            },
+            DebugVisualizerOptions::RemoteSyncTransformInterval(interval) => unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetRemoteSyncTransformInterval(command, *interval);
+            },
+            DebugVisualizerOptions::ShadowMapIntensity(intensity) => unsafe {
+                ffi::b3ConfigureOpenGLVisualizerSetShadowMapIntensity(command, *intensity);
+            },
+            DebugVisualizerOptions::RgbBackground(rgb) => unsafe {
+                let mut rgb_copy = *rgb;
+                ffi::b3ConfigureOpenGLVisualizerSetLightRgbBackground(
+                    command,
+                    rgb_copy.as_mut_ptr(),
+                );
+            },
         }
 
         let _ = self.submit_command(command)?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn reset_debug_visualizer_camera(
@@ -4350,7 +4397,10 @@ impl PhysicsClient {
         ))
     }
 
-    pub fn set_vr_camera_state(&mut self, options: &VrCameraStateOptions) -> BulletResult<()> {
+    pub fn set_vr_camera_state(
+        &mut self,
+        options: &VrCameraStateOptions,
+    ) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3SetVRCameraStateCommandInit(self.handle) };
 
@@ -4371,7 +4421,7 @@ impl PhysicsClient {
             command,
             ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
         )?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn get_keyboard_events(&mut self) -> BulletResult<Vec<KeyboardEvent>> {
@@ -4400,11 +4450,16 @@ impl PhysicsClient {
         Ok(Self::collect_mouse_events(&raw))
     }
 
-    pub fn start_state_logging(&mut self, options: &StateLoggingOptions<'_>) -> BulletResult<i32> {
+    pub fn start_state_logging(
+        &mut self,
+        logging_type: LoggingType,
+        file_name: impl AsRef<Path>,
+        options: StateLoggingOptions<'_>,
+    ) -> BulletResult<i32> {
         self.ensure_can_submit()?;
-        let file_c = Self::path_to_cstring(options.file_name)?;
+        let file_c = Self::path_to_cstring(file_name.as_ref())?;
         let command = unsafe { ffi::b3StateLoggingCommandInit(self.handle) };
-        unsafe { ffi::b3StateLoggingStart(command, options.logging_type, file_c.as_ptr()) };
+        unsafe { ffi::b3StateLoggingStart(command, logging_type as i32, file_c.as_ptr()) };
 
         if let Some(object_ids) = options.object_unique_ids {
             for &object_id in object_ids {
@@ -4430,7 +4485,7 @@ impl PhysicsClient {
             unsafe { ffi::b3StateLoggingSetDeviceTypeFilter(command, device_filter) };
         }
         if let Some(flags) = options.log_flags {
-            unsafe { ffi::b3StateLoggingSetLogFlags(command, flags) };
+            unsafe { ffi::b3StateLoggingSetLogFlags(command, flags.bits()) };
         }
 
         let status = self.submit_simple_command(
@@ -4448,9 +4503,9 @@ impl PhysicsClient {
         Ok(logging_id)
     }
 
-    pub fn stop_state_logging(&mut self, logging_id: i32) -> BulletResult<()> {
+    pub fn stop_state_logging(&mut self, logging_id: i32) -> BulletResult<&mut Self> {
         if logging_id < 0 {
-            return Ok(());
+            return Ok(self);
         }
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3StateLoggingCommandInit(self.handle) };
@@ -4459,7 +4514,7 @@ impl PhysicsClient {
             command,
             ffi::EnumSharedMemoryServerStatus::CMD_STATE_LOGGING_COMPLETED,
         )?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn load_plugin(&mut self, plugin_path: &str, postfix: Option<&str>) -> BulletResult<i32> {
@@ -4564,7 +4619,7 @@ impl PhysicsClient {
         Ok(())
     }
 
-    pub fn set_time_out(&mut self, time_out_seconds: f64) -> BulletResult<()> {
+    pub fn set_time_out(&mut self, time_out_seconds: f64) -> BulletResult<&mut Self> {
         if time_out_seconds < 0.0 {
             return Err(BulletError::CommandFailed {
                 message: "Timeout must be non-negative",
@@ -4573,7 +4628,7 @@ impl PhysicsClient {
         }
         self.ensure_can_submit()?;
         unsafe { ffi::b3SetTimeOut(self.handle, time_out_seconds) };
-        Ok(())
+        Ok(self)
     }
 
     pub fn get_api_version(&self) -> i32 {
@@ -4599,139 +4654,159 @@ impl PhysicsClient {
         update: &PhysicsEngineParametersUpdate,
     ) {
         unsafe {
-            if let Some(value) = update.default_contact_erp
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetDefaultContactERP(command, value);
+            if let Some(num_solver_iterations) = update.num_solver_iterations {
+                ffi::b3PhysicsParamSetNumSolverIterations(command, num_solver_iterations as i32);
             }
-            if let Some(value) = update.default_non_contact_erp
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetDefaultNonContactERP(command, value);
-            }
-            if let Some(value) = update.friction_erp
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetDefaultFrictionERP(command, value);
-            }
-            if let Some(value) = update.default_global_cfm
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetDefaultGlobalCFM(command, value);
-            }
-            if let Some(value) = update.friction_cfm
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetDefaultFrictionCFM(command, value);
-            }
-            if let Some(value) = update.num_sub_steps
-                && value >= 0
-            {
-                ffi::b3PhysicsParamSetNumSubSteps(command, value);
-            }
-            if let Some(value) = update.num_solver_iterations
-                && value >= 0
-            {
-                ffi::b3PhysicsParamSetNumSolverIterations(command, value);
-            }
-            if let Some(value) = update.warm_starting_factor
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetWarmStartingFactor(command, value);
-            }
-            if let Some(value) = update.articulated_warm_starting_factor
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetArticulatedWarmStartingFactor(command, value);
-            }
-            if let Some(value) = update.collision_filter_mode
-                && value >= 0
-            {
-                ffi::b3PhysicsParamSetCollisionFilterMode(command, value);
-            }
-            if let Some(value) = update.use_split_impulse {
-                ffi::b3PhysicsParamSetUseSplitImpulse(command, if value { 1 } else { 0 });
-            }
-            if let Some(value) = update.split_impulse_penetration_threshold
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetSplitImpulsePenetrationThreshold(command, value);
-            }
-            if let Some(value) = update.contact_breaking_threshold
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetContactBreakingThreshold(command, value);
-            }
-            if let Some(value) = update.max_num_commands_per_1ms
-                && value >= -1
-            {
-                ffi::b3PhysicsParamSetMaxNumCommandsPer1ms(command, value);
-            }
-            if let Some(value) = update.enable_file_caching {
-                ffi::b3PhysicsParamSetEnableFileCaching(command, if value { 1 } else { 0 });
-            }
-            if let Some(value) = update.restitution_velocity_threshold
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetRestitutionVelocityThreshold(command, value);
-            }
-            if let Some(value) = update.enable_cone_friction {
-                ffi::b3PhysicsParamSetEnableConeFriction(command, if value { 1 } else { 0 });
-            }
-            if let Some(value) = update.deterministic_overlapping_pairs {
-                ffi::b3PhysicsParameterSetDeterministicOverlappingPairs(
+            if let Some(minimum_solver_island_size) = update.minimum_solver_island_size {
+                ffi::b3PhysicsParameterSetMinimumSolverIslandSize(
                     command,
-                    if value { 1 } else { 0 },
+                    minimum_solver_island_size as i32,
                 );
             }
-            if let Some(value) = update.allowed_ccd_penetration
-                && value >= 0.0
+            if let Some(solver_residual_threshold) = update.solver_residual_threshold {
+                assert!(solver_residual_threshold.is_sign_positive());
+                ffi::b3PhysicsParamSetSolverResidualThreshold(command, solver_residual_threshold);
+            }
+            if let Some(collision_filter_mode) = update.collision_filter_mode {
+                ffi::b3PhysicsParamSetCollisionFilterMode(command, collision_filter_mode as i32);
+            }
+            if let Some(num_sub_steps) = update.num_sub_steps {
+                ffi::b3PhysicsParamSetNumSubSteps(command, num_sub_steps as i32);
+            }
+            if let Some(fixed_time_step) = update.fixed_time_step {
+                ffi::b3PhysicsParamSetTimeStep(command, fixed_time_step.as_secs_f64());
+            }
+            if let Some(use_split_impulse) = update.use_split_impulse {
+                match use_split_impulse {
+                    true => {
+                        ffi::b3PhysicsParamSetUseSplitImpulse(command, 1);
+                    }
+                    false => {
+                        ffi::b3PhysicsParamSetUseSplitImpulse(command, 0);
+                    }
+                }
+            }
+            if let Some(split_impulse_penetration_threshold) =
+                update.split_impulse_penetration_threshold
             {
-                ffi::b3PhysicsParameterSetAllowedCcdPenetration(command, value);
+                assert!(split_impulse_penetration_threshold.is_sign_positive());
+                ffi::b3PhysicsParamSetSplitImpulsePenetrationThreshold(
+                    command,
+                    split_impulse_penetration_threshold,
+                );
             }
-            if let Some(value) = update.joint_feedback_mode
-                && value >= 0
+            if let Some(contact_breaking_threshold) = update.contact_breaking_threshold {
+                assert!(contact_breaking_threshold.is_sign_positive());
+                ffi::b3PhysicsParamSetContactBreakingThreshold(command, contact_breaking_threshold);
+            }
+            if let Some(contact_slop) = update.contact_slop {
+                assert!(contact_slop.is_sign_positive());
+                ffi::b3PhysicsParamSetContactSlop(command, contact_slop);
+            }
+            if let Some(max_num_cmd_per_1_ms) = update.max_num_cmd_per_1_ms {
+                assert!(max_num_cmd_per_1_ms >= -1);
+                ffi::b3PhysicsParamSetMaxNumCommandsPer1ms(command, max_num_cmd_per_1_ms);
+            }
+            if let Some(restitution_velocity_threshold) = update.restitution_velocity_threshold {
+                assert!(restitution_velocity_threshold.is_sign_positive());
+                ffi::b3PhysicsParamSetRestitutionVelocityThreshold(
+                    command,
+                    restitution_velocity_threshold,
+                );
+            }
+            if let Some(enable_file_caching) = update.enable_file_caching {
+                match enable_file_caching {
+                    true => {
+                        ffi::b3PhysicsParamSetEnableFileCaching(command, 1);
+                    }
+                    false => {
+                        ffi::b3PhysicsParamSetEnableFileCaching(command, 0);
+                    }
+                }
+            }
+            if let Some(erp) = update.erp {
+                assert!(erp.is_sign_positive());
+                ffi::b3PhysicsParamSetDefaultNonContactERP(command, erp);
+            }
+            if let Some(contact_erp) = update.contact_erp {
+                assert!(contact_erp.is_sign_positive());
+                ffi::b3PhysicsParamSetDefaultContactERP(command, contact_erp);
+            }
+            if let Some(friction_erp) = update.friction_erp {
+                assert!(friction_erp.is_sign_positive());
+                ffi::b3PhysicsParamSetDefaultFrictionERP(command, friction_erp);
+            }
+            if let Some(enable_cone_friction) = update.enable_cone_friction {
+                match enable_cone_friction {
+                    true => {
+                        ffi::b3PhysicsParamSetEnableConeFriction(command, 1);
+                    }
+                    false => {
+                        ffi::b3PhysicsParamSetEnableConeFriction(command, 0);
+                    }
+                }
+            }
+            if let Some(deterministic_overlapping_pairs) = update.deterministic_overlapping_pairs {
+                match deterministic_overlapping_pairs {
+                    true => {
+                        ffi::b3PhysicsParameterSetDeterministicOverlappingPairs(command, 1);
+                    }
+                    false => {
+                        ffi::b3PhysicsParameterSetDeterministicOverlappingPairs(command, 0);
+                    }
+                }
+            }
+            if let Some(allowed_ccd_penetration) = update.allowed_ccd_penetration {
+                assert!(allowed_ccd_penetration.is_sign_positive());
+                ffi::b3PhysicsParameterSetAllowedCcdPenetration(command, allowed_ccd_penetration);
+            }
+            if let Some(joint_feedback_mode) = update.joint_feedback_mode {
+                ffi::b3PhysicsParameterSetJointFeedbackMode(command, joint_feedback_mode as i32);
+            }
+            if let Some(enable_sat) = update.enable_sat {
+                match enable_sat {
+                    true => {
+                        ffi::b3PhysicsParameterSetEnableSAT(command, 1);
+                    }
+                    false => {
+                        ffi::b3PhysicsParameterSetEnableSAT(command, 0);
+                    }
+                }
+            }
+            if let Some(constraint_solver_type) = update.constraint_solver_type {
+                let val = constraint_solver_type as i32;
+                println!("{:?}", val);
+                ffi::b3PhysicsParameterSetConstraintSolverType(command, val);
+            }
+            if let Some(global_cfm) = update.global_cfm {
+                assert!(global_cfm.is_sign_positive());
+                ffi::b3PhysicsParamSetDefaultGlobalCFM(command, global_cfm);
+            }
+            if let Some(report_solver_analytics) = update.report_solver_analytics {
+                match report_solver_analytics {
+                    true => {
+                        ffi::b3PhysicsParamSetSolverAnalytics(command, 1);
+                    }
+                    false => {
+                        ffi::b3PhysicsParamSetSolverAnalytics(command, 0);
+                    }
+                }
+            }
+            if let Some(warm_starting_factor) = update.warm_starting_factor {
+                assert!(warm_starting_factor.is_sign_positive());
+                ffi::b3PhysicsParamSetWarmStartingFactor(command, warm_starting_factor);
+            }
+            if let Some(sparse_sdf_voxel_size) = update.sparse_sdf_voxel_size {
+                assert!(sparse_sdf_voxel_size.is_sign_positive());
+                ffi::b3PhysicsParameterSetSparseSdfVoxelSize(command, sparse_sdf_voxel_size);
+            }
+            if let Some(num_non_contact_inner_iterations) = update.num_non_contact_inner_iterations
             {
-                ffi::b3PhysicsParameterSetJointFeedbackMode(command, value);
-            }
-            if let Some(value) = update.solver_residual_threshold
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetSolverResidualThreshold(command, value);
-            }
-            if let Some(value) = update.contact_slop
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParamSetContactSlop(command, value);
-            }
-            if let Some(value) = update.enable_sat {
-                ffi::b3PhysicsParameterSetEnableSAT(command, if value { 1 } else { 0 });
-            }
-            if let Some(value) = update.constraint_solver_type
-                && value >= 0
-            {
-                ffi::b3PhysicsParameterSetConstraintSolverType(command, value);
-            }
-            if let Some(value) = update.minimum_solver_island_size
-                && value >= 0
-            {
-                ffi::b3PhysicsParameterSetMinimumSolverIslandSize(command, value);
-            }
-            if let Some(value) = update.report_solver_analytics {
-                ffi::b3PhysicsParamSetSolverAnalytics(command, if value { 1 } else { 0 });
-            }
-            if let Some(value) = update.sparse_sdf_voxel_size
-                && value >= 0.0
-            {
-                ffi::b3PhysicsParameterSetSparseSdfVoxelSize(command, value);
-            }
-            if let Some(value) = update.num_non_contact_inner_iterations
-                && value >= 1
-            {
-                ffi::b3PhysicsParamSetNumNonContactInnerIterations(command, value);
-            }
-            if let Some(value) = update.internal_sim_flags {
-                ffi::b3PhysicsParamSetInternalSimFlags(command, value);
+                assert!(num_non_contact_inner_iterations >= 1);
+                ffi::b3PhysicsParamSetNumNonContactInnerIterations(
+                    command,
+                    num_non_contact_inner_iterations as i32,
+                );
             }
         }
     }
@@ -4741,15 +4816,15 @@ impl PhysicsClient {
         command: ffi::b3SharedMemoryCommandHandle,
     ) -> BulletResult<CommandStatus> {
         unsafe {
-            let status_handle = ffi::b3SubmitClientCommandAndWaitStatus(self.handle, command);
-            if status_handle.is_null() {
+            let handle = ffi::b3SubmitClientCommandAndWaitStatus(self.handle, command);
+            if handle.is_null() {
                 return Err(BulletError::NullPointer(
                     "Bullet returned a null status handle",
                 ));
             }
-            let status_type = ffi::b3GetStatusType(status_handle);
+            let status_type = ffi::b3GetStatusType(handle);
             Ok(CommandStatus {
-                handle: status_handle,
+                handle,
                 status_type,
             })
         }
@@ -5096,7 +5171,7 @@ impl PhysicsClient {
             || update.erp.is_some()
     }
 
-    fn read_c_string(raw: &[std::os::raw::c_char]) -> String {
+    pub(crate) fn read_c_string(raw: &[std::os::raw::c_char]) -> String {
         if raw.is_empty() || raw[0] == 0 {
             return String::new();
         }
@@ -5191,7 +5266,6 @@ impl PhysicsClient {
         &mut self,
         status_handle: ffi::b3SharedMemoryStatusHandle,
         link_index: i32,
-        options: LinkStateOptions,
     ) -> BulletResult<LinkState> {
         let mut raw = MaybeUninit::<ffi::b3LinkState>::uninit();
         let success = unsafe {
@@ -5203,39 +5277,12 @@ impl PhysicsClient {
                 code: success,
             });
         }
-
-        let raw = unsafe { raw.assume_init() };
-        Ok(LinkState {
-            world_position: raw.m_world_position,
-            world_orientation: raw.m_world_orientation,
-            local_inertial_position: raw.m_local_inertial_position,
-            local_inertial_orientation: raw.m_local_inertial_orientation,
-            world_link_frame_position: raw.m_world_link_frame_position,
-            world_link_frame_orientation: raw.m_world_link_frame_orientation,
-            world_linear_velocity: if options.compute_link_velocity {
-                Some(raw.m_world_linear_velocity)
-            } else {
-                None
-            },
-            world_angular_velocity: if options.compute_link_velocity {
-                Some(raw.m_world_angular_velocity)
-            } else {
-                None
-            },
-            world_aabb: if options.compute_forward_kinematics {
-                Some(Aabb {
-                    min: raw.m_world_aabb_min,
-                    max: raw.m_world_aabb_max,
-                })
-            } else {
-                None
-            },
-        })
+        unsafe { raw.assume_init() }.try_into()
     }
 
     fn extract_base_state(
         status_handle: ffi::b3SharedMemoryStatusHandle,
-    ) -> BulletResult<(BaseState, BaseVelocity)> {
+    ) -> BulletResult<(na::Isometry3<f64>, [f64; 6])> {
         if status_handle.is_null() {
             return Err(BulletError::NullPointer(
                 "Bullet returned a null status handle while reading base state",
@@ -5278,21 +5325,19 @@ impl PhysicsClient {
             ptr::copy_nonoverlapping(actual_state_q.add(3), orientation.as_mut_ptr(), 4);
         }
 
-        let mut linear = [0.0; 3];
-        let mut angular = [0.0; 3];
+        let mut velocity = [0.0; 6];
         if !actual_state_qdot.is_null() {
             unsafe {
-                ptr::copy_nonoverlapping(actual_state_qdot, linear.as_mut_ptr(), 3);
-                ptr::copy_nonoverlapping(actual_state_qdot.add(3), angular.as_mut_ptr(), 3);
+                ptr::copy_nonoverlapping(actual_state_qdot, velocity.as_mut_ptr(), 6);
             }
         }
 
         Ok((
-            BaseState {
-                position,
-                orientation,
-            },
-            BaseVelocity { linear, angular },
+            na::Isometry3::from_parts(
+                na::Translation3::from(position),
+                na::UnitQuaternion::from_quaternion(orientation.into()),
+            ),
+            velocity,
         ))
     }
 }

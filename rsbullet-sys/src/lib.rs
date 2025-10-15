@@ -2063,6 +2063,7 @@ pub enum eURDF_Flags {
     URDF_ENABLE_WAKEUP = 262144,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub enum EnumSharedMemoryServerStatus {
     CMD_SHARED_MEMORY_NOT_INITIALIZED = 0,
