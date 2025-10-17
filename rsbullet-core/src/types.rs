@@ -450,7 +450,7 @@ pub enum CollisionGeometry<'a> {
         normal: [f64; 3],
         constant: f64,
     },
-    Mesh {
+    MeshFile {
         file: &'a str,
         scale: [f64; 3],
     },
@@ -458,7 +458,7 @@ pub enum CollisionGeometry<'a> {
         vertices: &'a [[f64; 3]],
         scale: [f64; 3],
     },
-    ConcaveMesh {
+    Mesh {
         vertices: &'a [[f64; 3]],
         indices: &'a [i32],
         scale: [f64; 3],
@@ -603,13 +603,13 @@ pub struct MultiBodyBase {
     pub inertial_pose: na::Isometry3<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MultiBodyLink {
     pub mass: f64,
     pub collision_shape: CollisionId,
     pub visual_shape: VisualId,
     pub parent_index: Option<usize>,
-    pub joint_type: i32,
+    pub joint_type: JointType,
     pub joint_axis: [f64; 3],
     pub parent_transform: na::Isometry3<f64>,
     pub inertial_transform: na::Isometry3<f64>,
@@ -998,93 +998,200 @@ pub struct DynamicsUpdate {
     pub collision_margin: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub enum JointControlMode {
-    Velocity = 0,
-    Torque = 1,
-    #[default]
-    PositionVelocityPd = 2,
-    Pd = 3,
-    StablePd = 4,
+#[derive(Debug, Clone, Copy)]
+pub enum ControlMode {
+    /// Velocity control with the desired joint velocity
+    Velocity(f64),
+    /// Torque control with the desired joint torque.
+    Torque(f64),
+    /// Position Control with the desired joint position.
+    Position(f64),
+    /// PD Control
+    Pd {
+        /// desired target position
+        target_position: f64,
+        /// desired target velocity
+        target_velocity: f64,
+        /// position gain
+        position_gain: f64,
+        /// velocity gain
+        velocity_gain: f64,
+        /// limits the velocity of a joint
+        maximum_velocity: Option<f64>,
+    },
+    StablePd {
+        /// desired target position
+        target_position: f64,
+        /// desired target velocity
+        target_velocity: f64,
+        /// position gain
+        position_gain: f64,
+        /// velocity gain
+        velocity_gain: f64,
+        /// limits the velocity of a joint
+        maximum_velocity: Option<f64>,
+    },
 }
 
-impl JointControlMode {
+impl ControlMode {
     pub fn as_raw(self) -> i32 {
-        self as i32
+        match self {
+            ControlMode::Velocity(_) => 0,
+            ControlMode::Torque(_) => 1,
+            ControlMode::Position(_) => 2,
+            ControlMode::Pd { .. } => 3,
+            ControlMode::StablePd { .. } => 4,
+        }
     }
 
     pub fn is_position_based(self) -> bool {
         matches!(
             self,
-            JointControlMode::PositionVelocityPd
-                | JointControlMode::Pd
-                | JointControlMode::StablePd
+            ControlMode::Position(_) | ControlMode::Pd { .. } | ControlMode::StablePd { .. }
         )
     }
 
     pub fn is_velocity_based(self) -> bool {
-        matches!(self, JointControlMode::Velocity)
+        matches!(self, ControlMode::Velocity(_))
     }
 
     pub fn is_torque_based(self) -> bool {
-        matches!(self, JointControlMode::Torque)
+        matches!(self, ControlMode::Torque(_))
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct JointMotorControl2Options {
-    pub joint_index: i32,
-    pub control_mode: JointControlMode,
-    pub target_position: Option<f64>,
-    pub target_velocity: Option<f64>,
-    pub force: Option<f64>,
-    pub position_gain: Option<f64>,
-    pub velocity_gain: Option<f64>,
-    pub max_velocity: Option<f64>,
+#[derive(Debug, Clone, Copy)]
+pub enum ControlModeArray<const N: usize> {
+    /// Velocity control with the desired joint velocity
+    Velocity([f64; N]),
+    /// Torque control with the desired joint torque.
+    Torque([f64; N]),
+    /// Position Control with the desired joint position.
+    Position([f64; N]),
+    /// PD Control
+    Pd {
+        /// desired target position
+        target_position: [f64; N],
+        /// desired target velocity
+        target_velocity: [f64; N],
+        /// position gain
+        position_gain: [f64; N],
+        /// velocity gain
+        velocity_gain: [f64; N],
+        /// limits the velocity of a joint
+        maximum_velocity: Option<[f64; N]>,
+    },
+    StablePd {
+        /// desired target position
+        target_position: [f64; N],
+        /// desired target velocity
+        target_velocity: [f64; N],
+        /// position gain
+        position_gain: [f64; N],
+        /// velocity gain
+        velocity_gain: [f64; N],
+        /// limits the velocity of a joint
+        maximum_velocity: Option<[f64; N]>,
+    },
 }
 
+impl<const N: usize> ControlModeArray<N> {
+    pub fn as_raw(self) -> i32 {
+        match self {
+            ControlModeArray::Velocity(_) => 0,
+            ControlModeArray::Torque(_) => 1,
+            ControlModeArray::Position(_) => 2,
+            ControlModeArray::Pd { .. } => 3,
+            ControlModeArray::StablePd { .. } => 4,
+        }
+    }
+}
+
+/// Multi-DoF 单关节控制参数，使用枚举携带模式与数据（对齐 set_joint_motor_control 的风格）。
 #[derive(Debug, Clone)]
-pub struct JointMotorControlArrayOptions<'a> {
-    pub joint_indices: &'a [i32],
-    pub control_mode: JointControlMode,
-    pub target_positions: Option<&'a [f64]>,
-    pub target_velocities: Option<&'a [f64]>,
-    pub forces: Option<&'a [f64]>,
-    pub position_gains: Option<&'a [f64]>,
-    pub velocity_gains: Option<&'a [f64]>,
-    pub max_velocity: Option<f64>,
+pub enum MultiDofControl<'a> {
+    /// 位置/PD/Stable-PD 类控制，提供位置与速度目标、增益、力等。
+    Position {
+        target_positions: Option<&'a [f64]>,
+        target_velocities: Option<&'a [f64]>,
+        position_gains: Option<&'a [f64]>,
+        velocity_gains: Option<&'a [f64]>,
+        forces: Option<&'a [f64]>,
+        damping: Option<&'a [f64]>,
+        /// 限制最大速度（与 PD/StablePD 一致，可选）
+        max_velocity: Option<f64>,
+    },
+    /// PD 控制（行为与 Position 分支一致，仅控制码不同）。
+    Pd {
+        target_positions: Option<&'a [f64]>,
+        target_velocities: Option<&'a [f64]>,
+        position_gains: Option<&'a [f64]>,
+        velocity_gains: Option<&'a [f64]>,
+        forces: Option<&'a [f64]>,
+        damping: Option<&'a [f64]>,
+        max_velocity: Option<f64>,
+    },
+    /// Stable-PD 控制（行为与 Position 分支一致，仅控制码不同）。
+    StablePd {
+        target_positions: Option<&'a [f64]>,
+        target_velocities: Option<&'a [f64]>,
+        position_gains: Option<&'a [f64]>,
+        velocity_gains: Option<&'a [f64]>,
+        forces: Option<&'a [f64]>,
+        damping: Option<&'a [f64]>,
+        max_velocity: Option<f64>,
+    },
+    /// 速度控制，提供速度目标、速度增益、以及力限制。
+    Velocity {
+        target_velocities: Option<&'a [f64]>,
+        velocity_gains: Option<&'a [f64]>,
+        forces: Option<&'a [f64]>,
+        damping: Option<&'a [f64]>,
+    },
+    /// 力/力矩控制，直接指定力数组。
+    Torque {
+        forces: Option<&'a [f64]>,
+        damping: Option<&'a [f64]>,
+    },
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct JointMotorControlMultiDofOptions<'a> {
-    pub joint_index: i32,
-    pub control_mode: JointControlMode,
-    pub target_positions: Option<&'a [f64]>,
-    pub target_velocities: Option<&'a [f64]>,
-    pub forces: Option<&'a [f64]>,
-    pub position_gains: Option<&'a [f64]>,
-    pub velocity_gains: Option<&'a [f64]>,
-    pub damping: Option<&'a [f64]>,
-    pub max_velocity: Option<f64>,
+impl<'a> MultiDofControl<'a> {
+    /// 与底层 Bullet 控制码保持一致，用于初始化命令。
+    pub fn as_raw(&self) -> i32 {
+        match self {
+            MultiDofControl::Velocity { .. } => 0,
+            MultiDofControl::Torque { .. } => 1,
+            MultiDofControl::Position { .. } => 2,
+            MultiDofControl::Pd { .. } => 3,
+            MultiDofControl::StablePd { .. } => 4,
+        }
+    }
+
+    pub fn is_position_based(&self) -> bool {
+        matches!(
+            self,
+            MultiDofControl::Position { .. }
+                | MultiDofControl::Pd { .. }
+                | MultiDofControl::StablePd { .. }
+        )
+    }
+    pub fn is_velocity_based(&self) -> bool {
+        matches!(self, MultiDofControl::Velocity { .. })
+    }
+    pub fn is_torque_based(&self) -> bool {
+        matches!(self, MultiDofControl::Torque { .. })
+    }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct JointMotorControlMultiDofArrayEntry<'a> {
-    pub joint_index: i32,
-    pub target_positions: Option<&'a [f64]>,
-    pub target_velocities: Option<&'a [f64]>,
-    pub forces: Option<&'a [f64]>,
-    pub position_gains: Option<&'a [f64]>,
-    pub velocity_gains: Option<&'a [f64]>,
-    pub damping: Option<&'a [f64]>,
-    pub max_velocity: Option<f64>,
-}
-
+/// Multi-DoF 批量控制条目：关联关节索引与控制枚举。
 #[derive(Debug, Clone)]
-pub struct JointMotorControlMultiDofArrayOptions<'a> {
-    pub control_mode: JointControlMode,
-    pub entries: &'a [JointMotorControlMultiDofArrayEntry<'a>],
+pub struct MultiDofControlEntry<'a> {
+    pub joint_index: i32,
+    pub control: MultiDofControl<'a>,
 }
+
+// 旧的 JointMotorControlMultiDofOptions / JointMotorControlMultiDofArrayOptions 已移除，
+// 请使用 MultiDofControl 与 MultiDofControlEntry。
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]

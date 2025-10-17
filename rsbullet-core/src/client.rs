@@ -871,14 +871,14 @@ impl PhysicsClient {
     pub fn create_collision_shape(
         &mut self,
         geometry: CollisionGeometry<'_>,
-        options: impl Into<CollisionShapeOptions>,
+        options: impl Into<Option<CollisionShapeOptions>>,
     ) -> BulletResult<i32> {
         self.ensure_can_submit()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
         let shape_index = self.add_collision_geometry(command, &geometry, &mut scratch)?;
 
-        let CollisionShapeOptions { transform, flags } = options.into();
+        let CollisionShapeOptions { transform, flags } = options.into().unwrap_or_default();
 
         if let Some(flags) = flags {
             unsafe { ffi::b3CreateCollisionSetFlag(command, shape_index, flags) };
@@ -1172,7 +1172,7 @@ impl PhysicsClient {
                     link_inertial_position.as_ptr(),
                     link_inertial_orientation.as_ptr(),
                     parent_index,
-                    link.joint_type,
+                    link.joint_type as i32,
                     link.joint_axis.as_ptr(),
                 );
             }
@@ -2291,52 +2291,16 @@ impl PhysicsClient {
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
-        control_mode: JointControlMode,
-        target_value: f64,
-        max_force: Option<f64>,
-        gain: Option<f64>,
-    ) -> BulletResult<()> {
-        let mut options = JointMotorControl2Options {
-            joint_index,
-            control_mode,
-            ..Default::default()
-        };
-
-        match control_mode {
-            JointControlMode::Velocity => {
-                options.target_velocity = Some(target_value);
-                options.velocity_gain = gain;
-                options.force = max_force;
-            }
-            JointControlMode::Torque => {
-                options.force = Some(target_value);
-            }
-            _ => {
-                options.target_position = Some(target_value);
-                options.position_gain = gain;
-                options.force = max_force;
-            }
-        }
-
-        self.set_joint_motor_control2(body_unique_id, &options)
-    }
-
-    pub fn set_joint_motor_control2(
-        &mut self,
-        body_unique_id: i32,
-        options: &JointMotorControl2Options,
+        control_mode: ControlMode,
+        maximum_force: Option<f64>,
     ) -> BulletResult<()> {
         self.ensure_can_submit()?;
-        let joint_info = self.get_joint_info(body_unique_id, options.joint_index)?;
+        let info = self.get_joint_info(body_unique_id, joint_index)?;
         let command = unsafe {
-            ffi::b3JointControlCommandInit2(
-                self.handle,
-                body_unique_id,
-                options.control_mode.as_raw(),
-            )
+            ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
 
-        let u_index = joint_info.u_index;
+        let u_index = info.u_index;
         if u_index < 0 {
             return Err(BulletError::CommandFailed {
                 message: "Joint has no velocity DOF for motor control",
@@ -2344,71 +2308,57 @@ impl PhysicsClient {
             });
         }
 
+        let force = maximum_force.unwrap_or(100000.);
+        let kp = 0.1;
+        let kd = 1.0;
+        let target_velocity = 0.;
+
         unsafe {
-            if let Some(max_velocity) = options.max_velocity {
-                ffi::b3JointControlSetMaximumVelocity(command, u_index, max_velocity);
-            }
-        }
+            match control_mode {
+                ControlMode::Position(target_position) => {
+                    ffi::b3JointControlSetDesiredPosition(command, info.q_index, target_position);
 
-        match options.control_mode {
-            mode if mode.is_velocity_based() => {
-                let target_velocity = options.target_velocity.unwrap_or(0.0);
-                unsafe {
-                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
-                    ffi::b3JointControlSetKd(
-                        command,
-                        u_index,
-                        options.velocity_gain.unwrap_or(1.0),
-                    );
-                    ffi::b3JointControlSetMaximumForce(
-                        command,
-                        u_index,
-                        options.force.unwrap_or(joint_info.max_force),
-                    );
+                    ffi::b3JointControlSetKp(command, info.u_index, kp);
+                    ffi::b3JointControlSetDesiredVelocity(command, info.u_index, target_velocity);
+
+                    ffi::b3JointControlSetKd(command, info.u_index, kd);
+                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force);
                 }
-            }
-            mode if mode.is_torque_based() => unsafe {
-                ffi::b3JointControlSetDesiredForceTorque(
-                    command,
-                    u_index,
-                    options.force.unwrap_or(0.0),
-                );
-            },
-            _ => {
-                if joint_info.q_index < 0 {
-                    return Err(BulletError::CommandFailed {
-                        message: "Joint has no position DOF for position control",
-                        code: joint_info.q_index,
-                    });
+                ControlMode::Pd {
+                    target_position: pos,
+                    target_velocity: vel,
+                    position_gain: kp,
+                    velocity_gain: kd,
+                    maximum_velocity: max_vel,
                 }
-                let target_position = options.target_position.unwrap_or(0.0);
-                let target_velocity = options.target_velocity.unwrap_or(0.0);
-                unsafe {
-                    ffi::b3JointControlSetDesiredPosition(
-                        command,
-                        joint_info.q_index,
-                        target_position,
-                    );
-                    ffi::b3JointControlSetKp(
-                        command,
-                        u_index,
-                        options.position_gain.unwrap_or(0.1),
-                    );
-                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
-                    ffi::b3JointControlSetKd(
-                        command,
-                        u_index,
-                        options.velocity_gain.unwrap_or(1.0),
-                    );
-                    ffi::b3JointControlSetMaximumForce(
-                        command,
-                        u_index,
-                        options.force.unwrap_or(joint_info.max_force),
-                    );
+                | ControlMode::StablePd {
+                    target_position: pos,
+                    target_velocity: vel,
+                    position_gain: kp,
+                    velocity_gain: kd,
+                    maximum_velocity: max_vel,
+                } => {
+                    if let Some(max_vel) = max_vel {
+                        ffi::b3JointControlSetMaximumVelocity(command, info.u_index, max_vel);
+                    }
+                    ffi::b3JointControlSetDesiredPosition(command, info.q_index, pos);
+
+                    ffi::b3JointControlSetKp(command, info.u_index, kp);
+                    ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel);
+
+                    ffi::b3JointControlSetKd(command, info.u_index, kd);
+                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force);
+                }
+                ControlMode::Velocity(vel) => {
+                    ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel);
+                    ffi::b3JointControlSetKd(command, info.u_index, kd);
+                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force);
+                }
+                ControlMode::Torque(f) => {
+                    ffi::b3JointControlSetDesiredForceTorque(command, info.u_index, f);
                 }
             }
         }
-
         self.submit_simple_command(
             command,
             ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
@@ -2416,104 +2366,93 @@ impl PhysicsClient {
         Ok(())
     }
 
-    pub fn set_joint_motor_control_array(
+    pub fn set_joint_motor_control_array<const N: usize>(
         &mut self,
         body_unique_id: i32,
-        options: &JointMotorControlArrayOptions<'_>,
+        joint_index: [i32; N],
+        control_mode: ControlModeArray<N>,
+        maximum_force: Option<[f64; N]>,
     ) -> BulletResult<()> {
-        if options.joint_indices.is_empty() {
+        if joint_index.is_empty() {
             return Ok(());
         }
         self.ensure_can_submit()?;
         let command = unsafe {
-            ffi::b3JointControlCommandInit2(
-                self.handle,
-                body_unique_id,
-                options.control_mode.as_raw(),
-            )
+            ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
 
-        let count = options.joint_indices.len();
-        for (idx, &joint_index) in options.joint_indices.iter().enumerate() {
-            let info = self.get_joint_info(body_unique_id, joint_index)?;
-            let u_index = info.u_index;
-            if u_index < 0 {
-                return Err(BulletError::CommandFailed {
-                    message: "Joint has no velocity DOF for motor control",
-                    code: u_index,
-                });
-            }
+        let force = maximum_force.unwrap_or([100000.; N]);
+        let kp = 0.1;
+        let kd = 1.0;
+        let target_velocity = 0.;
 
-            unsafe {
-                if let Some(max_velocity) = options.max_velocity {
-                    ffi::b3JointControlSetMaximumVelocity(command, u_index, max_velocity);
-                }
-            }
+        unsafe {
+            match control_mode {
+                ControlModeArray::Position(target) => {
+                    for i in 0..N {
+                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
 
-            if options.control_mode.is_position_based() {
-                if info.q_index < 0 {
-                    return Err(BulletError::CommandFailed {
-                        message: "Joint has no position DOF for position control",
-                        code: info.q_index,
-                    });
-                }
+                        ffi::b3JointControlSetDesiredPosition(command, info.q_index, target[i]);
 
-                if let Some(position) =
-                    Self::value_from_slice(options.target_positions, idx, count, "targetPositions")?
-                {
-                    unsafe {
-                        ffi::b3JointControlSetDesiredPosition(command, info.q_index, position);
+                        ffi::b3JointControlSetKp(command, info.u_index, kp);
+                        ffi::b3JointControlSetDesiredVelocity(
+                            command,
+                            info.u_index,
+                            target_velocity,
+                        );
+
+                        ffi::b3JointControlSetKd(command, info.u_index, kd);
+                        ffi::b3JointControlSetMaximumForce(command, info.u_index, force[i]);
                     }
                 }
-
-                let target_velocity = Self::value_from_slice(
-                    options.target_velocities,
-                    idx,
-                    count,
-                    "targetVelocities",
-                )?
-                .unwrap_or(0.0);
-                unsafe {
-                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
+                ControlModeArray::Pd {
+                    target_position: pos,
+                    target_velocity: vel,
+                    position_gain: kp,
+                    velocity_gain: kd,
+                    maximum_velocity: max_vel,
                 }
+                | ControlModeArray::StablePd {
+                    target_position: pos,
+                    target_velocity: vel,
+                    position_gain: kp,
+                    velocity_gain: kd,
+                    maximum_velocity: max_vel,
+                } => {
+                    for i in 0..N {
+                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
+                        if let Some(max_vel) = max_vel {
+                            ffi::b3JointControlSetMaximumVelocity(
+                                command,
+                                info.u_index,
+                                max_vel[i],
+                            );
+                        }
+                        ffi::b3JointControlSetDesiredPosition(command, info.q_index, pos[i]);
 
-                let kp =
-                    Self::value_from_slice(options.position_gains, idx, count, "positionGains")?
-                        .unwrap_or(0.1);
-                unsafe { ffi::b3JointControlSetKp(command, u_index, kp) };
+                        ffi::b3JointControlSetKp(command, info.u_index, kp[i]);
+                        ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel[i]);
 
-                let kd =
-                    Self::value_from_slice(options.velocity_gains, idx, count, "velocityGains")?
-                        .unwrap_or(1.0);
-                unsafe { ffi::b3JointControlSetKd(command, u_index, kd) };
-
-                let force = Self::value_from_slice(options.forces, idx, count, "forces")?
-                    .unwrap_or(info.max_force);
-                unsafe { ffi::b3JointControlSetMaximumForce(command, u_index, force) };
-            } else if options.control_mode.is_velocity_based() {
-                let target_velocity = Self::value_from_slice(
-                    options.target_velocities,
-                    idx,
-                    count,
-                    "targetVelocities",
-                )?
-                .unwrap_or(0.0);
-                unsafe {
-                    ffi::b3JointControlSetDesiredVelocity(command, u_index, target_velocity);
+                        ffi::b3JointControlSetKd(command, info.u_index, kd[i]);
+                        ffi::b3JointControlSetMaximumForce(command, info.u_index, force[i]);
+                    }
                 }
+                ControlModeArray::Velocity(vel) => {
+                    for i in 0..N {
+                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
 
-                let kd =
-                    Self::value_from_slice(options.velocity_gains, idx, count, "velocityGains")?
-                        .unwrap_or(1.0);
-                unsafe { ffi::b3JointControlSetKd(command, u_index, kd) };
+                        ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel[i]);
+                        ffi::b3JointControlSetKd(command, info.u_index, kd);
+                        ffi::b3JointControlSetMaximumForce(command, info.u_index, force[i]);
+                    }
+                }
+                ControlModeArray::Torque(f) => {
+                    for i in 0..N {
+                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
 
-                let force = Self::value_from_slice(options.forces, idx, count, "forces")?
-                    .unwrap_or(info.max_force);
-                unsafe { ffi::b3JointControlSetMaximumForce(command, u_index, force) };
-            } else if options.control_mode.is_torque_based() {
-                let force =
-                    Self::value_from_slice(options.forces, idx, count, "forces")?.unwrap_or(0.0);
-                unsafe { ffi::b3JointControlSetDesiredForceTorque(command, u_index, force) };
+                        ffi::b3JointControlSetDesiredForceTorque(command, info.u_index, f[i]);
+                    }
+                }
             }
         }
 
@@ -2527,19 +2466,16 @@ impl PhysicsClient {
     pub fn set_joint_motor_control_multi_dof(
         &mut self,
         body_unique_id: i32,
-        options: &JointMotorControlMultiDofOptions<'_>,
+        joint_index: i32,
+        control: MultiDofControl<'_>,
     ) -> BulletResult<()> {
         self.ensure_can_submit()?;
-        let info = self.get_joint_info(body_unique_id, options.joint_index)?;
+        let info = self.get_joint_info(body_unique_id, joint_index)?;
         let command = unsafe {
-            ffi::b3JointControlCommandInit2(
-                self.handle,
-                body_unique_id,
-                options.control_mode.as_raw(),
-            )
+            ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control.as_raw())
         };
 
-        self.configure_multi_dof_control(command, &info, options.control_mode, options)?;
+        self.configure_multi_dof_control(command, &info, &control)?;
 
         self.submit_simple_command(
             command,
@@ -2551,34 +2487,32 @@ impl PhysicsClient {
     pub fn set_joint_motor_control_multi_dof_array(
         &mut self,
         body_unique_id: i32,
-        options: &JointMotorControlMultiDofArrayOptions<'_>,
+        entries: &[MultiDofControlEntry<'_>],
     ) -> BulletResult<()> {
-        if options.entries.is_empty() {
+        if entries.is_empty() {
             return Ok(());
         }
         self.ensure_can_submit()?;
+        // 选择第一个条目的控制模式初始化命令（Bullet 要求一次命令同一模式）。
         let command = unsafe {
             ffi::b3JointControlCommandInit2(
                 self.handle,
                 body_unique_id,
-                options.control_mode.as_raw(),
+                entries[0].control.as_raw(),
             )
         };
 
-        for entry in options.entries {
+        // 校验所有条目控制模式一致，以符合底层一次命令的限制。
+        let expected_mode = entries[0].control.as_raw();
+        for entry in entries {
+            if entry.control.as_raw() != expected_mode {
+                return Err(BulletError::CommandFailed {
+                    message: "All Multi-DoF array entries must use the same control mode",
+                    code: -1,
+                });
+            }
             let info = self.get_joint_info(body_unique_id, entry.joint_index)?;
-            let opts = JointMotorControlMultiDofOptions {
-                joint_index: entry.joint_index,
-                control_mode: options.control_mode,
-                target_positions: entry.target_positions,
-                target_velocities: entry.target_velocities,
-                forces: entry.forces,
-                position_gains: entry.position_gains,
-                velocity_gains: entry.velocity_gains,
-                damping: entry.damping,
-                max_velocity: entry.max_velocity,
-            };
-            self.configure_multi_dof_control(command, &info, options.control_mode, &opts)?;
+            self.configure_multi_dof_control(command, &info, &entry.control)?;
         }
 
         self.submit_simple_command(
@@ -3389,15 +3323,35 @@ impl PhysicsClient {
         &mut self,
         command: ffi::b3SharedMemoryCommandHandle,
         info: &JointInfo,
-        mode: JointControlMode,
-        options: &JointMotorControlMultiDofOptions<'_>,
+        control: &MultiDofControl<'_>,
     ) -> BulletResult<()> {
         let q_index = info.q_index;
         let u_index = info.u_index;
         let q_size = info.q_size.max(0) as usize;
         let u_size = info.u_size.max(0) as usize;
 
-        if let Some(max_velocity) = options.max_velocity {
+        // 提取通用字段（damping、max_velocity），随后根据模式填充细节。
+        let (damping_opt, max_velocity_opt) = match control {
+            MultiDofControl::Position {
+                damping,
+                max_velocity,
+                ..
+            }
+            | MultiDofControl::Pd {
+                damping,
+                max_velocity,
+                ..
+            }
+            | MultiDofControl::StablePd {
+                damping,
+                max_velocity,
+                ..
+            } => (*damping, *max_velocity),
+            MultiDofControl::Velocity { damping, .. } => (*damping, None),
+            MultiDofControl::Torque { damping, .. } => (*damping, None),
+        };
+
+        if let Some(max_velocity) = max_velocity_opt {
             if u_index < 0 || u_size == 0 {
                 return Err(BulletError::CommandFailed {
                     message: "Joint has no velocity DOF for max velocity control",
@@ -3414,8 +3368,7 @@ impl PhysicsClient {
                 };
             }
         }
-
-        if let Some(damping) = options.damping {
+        if let Some(damping) = damping_opt {
             if u_index < 0 || u_size == 0 {
                 return Err(BulletError::CommandFailed {
                     message: "Joint has no velocity DOF for damping",
@@ -3432,8 +3385,7 @@ impl PhysicsClient {
                 );
             }
         }
-
-        if mode.is_position_based() {
+        if control.is_position_based() {
             if q_index < 0 || q_size == 0 {
                 return Err(BulletError::CommandFailed {
                     message: "Joint has no position DOF for position control",
@@ -3447,8 +3399,44 @@ impl PhysicsClient {
                 });
             }
 
+            // 解构各模式下需要的参数
+            let (target_positions, target_velocities, position_gains, velocity_gains, forces) =
+                match control {
+                    MultiDofControl::Position {
+                        target_positions,
+                        target_velocities,
+                        position_gains,
+                        velocity_gains,
+                        forces,
+                        ..
+                    }
+                    | MultiDofControl::Pd {
+                        target_positions,
+                        target_velocities,
+                        position_gains,
+                        velocity_gains,
+                        forces,
+                        ..
+                    }
+                    | MultiDofControl::StablePd {
+                        target_positions,
+                        target_velocities,
+                        position_gains,
+                        velocity_gains,
+                        forces,
+                        ..
+                    } => (
+                        *target_positions,
+                        *target_velocities,
+                        *position_gains,
+                        *velocity_gains,
+                        *forces,
+                    ),
+                    _ => unreachable!(),
+                };
+
             let positions =
-                Self::slice_or_default(options.target_positions, q_size, 0.0, "targetPositions")?;
+                Self::slice_or_default(target_positions, q_size, 0.0, "targetPositions")?;
             unsafe {
                 ffi::b3JointControlSetDesiredPositionMultiDof(
                     command,
@@ -3459,7 +3447,7 @@ impl PhysicsClient {
             }
 
             let velocities =
-                Self::slice_or_default(options.target_velocities, u_size, 0.0, "targetVelocities")?;
+                Self::slice_or_default(target_velocities, u_size, 0.0, "targetVelocities")?;
             unsafe {
                 ffi::b3JointControlSetDesiredVelocityMultiDof(
                     command,
@@ -3469,23 +3457,23 @@ impl PhysicsClient {
                 );
             }
 
-            let kps = Self::slice_or_default(options.position_gains, u_size, 0.1, "positionGains")?;
+            let kps = Self::slice_or_default(position_gains, u_size, 0.1, "positionGains")?;
             unsafe {
                 ffi::b3JointControlSetKpMultiDof(command, u_index, kps.as_ptr(), u_size as i32);
             }
 
-            let kds = Self::slice_or_default(options.velocity_gains, u_size, 1.0, "velocityGains")?;
+            let kds = Self::slice_or_default(velocity_gains, u_size, 1.0, "velocityGains")?;
             unsafe {
                 ffi::b3JointControlSetKdMultiDof(command, u_index, kds.as_ptr(), u_size as i32);
             }
 
-            let forces = Self::slice_or_default(options.forces, u_size, info.max_force, "forces")?;
+            let forces = Self::slice_or_default(forces, u_size, info.max_force, "forces")?;
             for (dof, &force) in forces.iter().enumerate() {
                 unsafe {
                     ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force);
                 }
             }
-        } else if mode.is_velocity_based() {
+        } else if control.is_velocity_based() {
             if u_index < 0 || u_size == 0 {
                 return Err(BulletError::CommandFailed {
                     message: "Joint has no velocity DOF for velocity control",
@@ -3493,8 +3481,18 @@ impl PhysicsClient {
                 });
             }
 
+            let (target_velocities, velocity_gains, forces) = match control {
+                MultiDofControl::Velocity {
+                    target_velocities,
+                    velocity_gains,
+                    forces,
+                    ..
+                } => (*target_velocities, *velocity_gains, *forces),
+                _ => unreachable!(),
+            };
+
             let velocities =
-                Self::slice_or_default(options.target_velocities, u_size, 0.0, "targetVelocities")?;
+                Self::slice_or_default(target_velocities, u_size, 0.0, "targetVelocities")?;
             unsafe {
                 ffi::b3JointControlSetDesiredVelocityMultiDof(
                     command,
@@ -3504,18 +3502,18 @@ impl PhysicsClient {
                 );
             }
 
-            let kds = Self::slice_or_default(options.velocity_gains, u_size, 1.0, "velocityGains")?;
+            let kds = Self::slice_or_default(velocity_gains, u_size, 1.0, "velocityGains")?;
             unsafe {
                 ffi::b3JointControlSetKdMultiDof(command, u_index, kds.as_ptr(), u_size as i32);
             }
 
-            let forces = Self::slice_or_default(options.forces, u_size, info.max_force, "forces")?;
+            let forces = Self::slice_or_default(forces, u_size, info.max_force, "forces")?;
             for (dof, &force) in forces.iter().enumerate() {
                 unsafe {
                     ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force);
                 }
             }
-        } else if mode.is_torque_based() {
+        } else if control.is_torque_based() {
             if u_index < 0 || u_size == 0 {
                 return Err(BulletError::CommandFailed {
                     message: "Joint has no velocity DOF for torque control",
@@ -3523,7 +3521,11 @@ impl PhysicsClient {
                 });
             }
 
-            let forces = Self::slice_or_default(options.forces, u_size, 0.0, "forces")?;
+            let forces = match control {
+                MultiDofControl::Torque { forces, .. } => *forces,
+                _ => None,
+            };
+            let forces = Self::slice_or_default(forces, u_size, 0.0, "forces")?;
             unsafe {
                 ffi::b3JointControlSetDesiredForceTorqueMultiDof(
                     command,
@@ -3573,20 +3575,6 @@ impl PhysicsClient {
             Ok(Cow::Borrowed(slice))
         } else {
             Ok(Cow::Owned(vec![default_value; expected_len]))
-        }
-    }
-
-    fn value_from_slice(
-        data: Option<&[f64]>,
-        index: usize,
-        expected_len: usize,
-        name: &'static str,
-    ) -> BulletResult<Option<f64>> {
-        if let Some(slice) = data {
-            Self::ensure_slice_len(name, slice.len(), expected_len)?;
-            Ok(Some(slice[index]))
-        } else {
-            Ok(None)
         }
     }
 
@@ -4275,7 +4263,7 @@ impl PhysicsClient {
     pub fn reset_debug_visualizer_camera(
         &mut self,
         options: &ResetDebugVisualizerCameraOptions,
-    ) -> BulletResult<()> {
+    ) -> BulletResult<&mut Self> {
         if options.distance < 0.0 {
             return Err(BulletError::CommandFailed {
                 message: "cameraDistance must be non-negative",
@@ -4295,7 +4283,7 @@ impl PhysicsClient {
             );
         }
         let _ = self.submit_command(command)?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn get_visual_shape_data(
@@ -4915,7 +4903,7 @@ impl PhysicsClient {
             Plane { normal, constant } => unsafe {
                 ffi::b3CreateCollisionShapeAddPlane(command, normal.as_ptr(), *constant)
             },
-            Mesh { file, scale } => {
+            &MeshFile { file, scale } => {
                 let file_ptr = scratch.push_c_string(file)?;
                 unsafe { ffi::b3CreateCollisionShapeAddMesh(command, file_ptr, scale.as_ptr()) }
             }
@@ -4938,7 +4926,7 @@ impl PhysicsClient {
                     )
                 }
             }
-            ConcaveMesh {
+            Mesh {
                 vertices,
                 indices,
                 scale,

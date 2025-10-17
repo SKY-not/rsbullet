@@ -60,7 +60,7 @@ fn main() -> BulletResult<()> {
         },
     )?;
     let collision_shape = client.create_collision_shape(
-        CollisionGeometry::Mesh {
+        CollisionGeometry::MeshFile {
             file: "duck_vhacd.obj",
             scale: mesh_scale,
         },

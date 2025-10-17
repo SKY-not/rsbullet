@@ -34,7 +34,7 @@ fn main() -> BulletResult<()> {
             1.,
         ];
 
-        ray_to.push(ray.into());
+        ray_to.push(ray);
         if replace_lines {
             ray_ids.push(
                 client
