@@ -1098,12 +1098,16 @@ impl PhysicsClient {
         &mut self,
         body_unique_id: i32,
         link_index: i32,
-        shape_index: i32,
         options: &ChangeVisualShapeOptions,
     ) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let command = unsafe {
-            ffi::b3InitUpdateVisualShape2(self.handle, body_unique_id, link_index, shape_index)
+            ffi::b3InitUpdateVisualShape2(
+                self.handle,
+                body_unique_id,
+                link_index,
+                options.shape_index.0,
+            )
         };
 
         if let Some(texture_id) = options.texture_unique_id {
@@ -1138,8 +1142,8 @@ impl PhysicsClient {
             ffi::b3CreateMultiBodyBase(
                 command,
                 options.base.mass,
-                options.base.collision_shape,
-                options.base.visual_shape,
+                options.base.collision_shape.0,
+                options.base.visual_shape.0,
                 base_position.as_ptr(),
                 base_orientation.as_ptr(),
                 inertial_position.as_ptr(),
@@ -1161,8 +1165,8 @@ impl PhysicsClient {
                 ffi::b3CreateMultiBodyLink(
                     command,
                     link.mass,
-                    link.collision_shape as f64,
-                    link.visual_shape as f64,
+                    link.collision_shape.0 as f64,
+                    link.visual_shape.0 as f64,
                     link_position.as_ptr(),
                     link_orientation.as_ptr(),
                     link_inertial_position.as_ptr(),
@@ -1413,7 +1417,7 @@ impl PhysicsClient {
         if id < 0 { None } else { Some(id) }
     }
 
-    pub fn load_texture(&mut self, filename: &str) -> BulletResult<TextureInfo> {
+    pub fn load_texture(&mut self, filename: &str) -> BulletResult<i32> {
         self.ensure_can_submit()?;
         let filename_c = CString::new(filename)?;
         let command = unsafe { ffi::b3InitLoadTexture(self.handle, filename_c.as_ptr()) };
@@ -1428,9 +1432,7 @@ impl PhysicsClient {
                 code: texture_id,
             });
         }
-        Ok(TextureInfo {
-            texture_unique_id: texture_id,
-        })
+        Ok(texture_id)
     }
 
     pub fn change_texture(&mut self, texture_id: i32, data: &TextureData<'_>) -> BulletResult<()> {
@@ -3842,7 +3844,7 @@ impl PhysicsClient {
 /// | getVisualShapeData | Implemented | Visual query |
 /// | getCollisionShapeData | Implemented | Collision query |
 impl PhysicsClient {
-    pub fn get_camera_image(&mut self, request: &CameraImageRequest) -> BulletResult<CameraImage> {
+    pub fn get_camera_image(&mut self, request: &CameraImageOptions) -> BulletResult<CameraImage> {
         if request.width <= 0 || request.height <= 0 {
             return Err(BulletError::CommandFailed {
                 message: "Camera image width/height must be positive",
@@ -3897,7 +3899,7 @@ impl PhysicsClient {
             unsafe { ffi::b3RequestCameraImageSetLightSpecularCoeff(command, coeff) };
         }
         if let Some(renderer) = request.renderer {
-            unsafe { ffi::b3RequestCameraImageSelectRenderer(command, renderer) };
+            unsafe { ffi::b3RequestCameraImageSelectRenderer(command, renderer as i32) };
         }
         if let Some(flags) = request.flags {
             unsafe { ffi::b3RequestCameraImageSetFlags(command, flags) };
@@ -4454,15 +4456,16 @@ impl PhysicsClient {
         &mut self,
         logging_type: LoggingType,
         file_name: impl AsRef<Path>,
-        options: StateLoggingOptions<'_>,
+        options: Option<impl Into<StateLoggingOptions>>,
     ) -> BulletResult<i32> {
         self.ensure_can_submit()?;
         let file_c = Self::path_to_cstring(file_name.as_ref())?;
         let command = unsafe { ffi::b3StateLoggingCommandInit(self.handle) };
         unsafe { ffi::b3StateLoggingStart(command, logging_type as i32, file_c.as_ptr()) };
 
+        let options = options.map(Into::into).unwrap_or_default();
         if let Some(object_ids) = options.object_unique_ids {
-            for &object_id in object_ids {
+            for object_id in object_ids {
                 unsafe { ffi::b3StateLoggingAddLoggingObjectUniqueId(command, object_id) };
             }
         }

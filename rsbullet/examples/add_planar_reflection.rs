@@ -15,7 +15,7 @@ fn main() -> BulletResult<()> {
     let log_id = client.start_state_logging(
         LoggingType::ProfileTimings,
         "visualShapeBench.json",
-        Default::default(),
+        None::<()>,
     )?;
 
     let plane = client.load_urdf(
@@ -78,8 +78,8 @@ fn main() -> BulletResult<()> {
             client.create_multi_body(&MultiBodyCreateOptions {
                 base: MultiBodyBase {
                     mass: 1.,
-                    collision_shape,
-                    visual_shape,
+                    collision_shape: CollisionId(collision_shape),
+                    visual_shape: VisualId(visual_shape),
                     pose: na::Isometry3::translation(
                         ((-range_x as f64 / 2.) + i as f64) * mesh_scale[0] * 2.,
                         ((-range_y as f64 / 2.) + j as f64) * mesh_scale[1] * 2.,
@@ -136,7 +136,6 @@ fn main() -> BulletResult<()> {
                                 client.change_visual_shape(
                                     ray.object_unique_id,
                                     ray.link_index,
-                                    -1,
                                     &ChangeVisualShapeOptions {
                                         rgba_color: Some(colors[current_color]),
                                         ..Default::default()

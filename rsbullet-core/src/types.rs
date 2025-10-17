@@ -420,6 +420,16 @@ bitflags::bitflags! {
 // | loadTexture | **Implemented** | Visual assets |
 // | changeTexture | **Implemented** | Visual assets |
 
+/// The unique ID for a Collision Shape.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct CollisionId(pub i32);
+
+impl Default for CollisionId {
+    fn default() -> Self {
+        Self(-1)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum CollisionGeometry<'a> {
     Sphere {
@@ -504,6 +514,16 @@ where
     }
 }
 
+/// The unique ID for a Visual Shape
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct VisualId(pub i32);
+
+impl Default for VisualId {
+    fn default() -> Self {
+        Self(-1)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum VisualGeometry<'a> {
     Sphere {
@@ -567,58 +587,32 @@ impl Default for VisualShapeOptions {
 
 #[derive(Debug, Clone, Default)]
 pub struct ChangeVisualShapeOptions {
+    pub shape_index: VisualId,
     pub texture_unique_id: Option<i32>,
     pub rgba_color: Option<[f64; 4]>,
     pub specular_color: Option<[f64; 3]>,
     pub flags: Option<i32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MultiBodyBase {
     pub mass: f64,
     pub pose: na::Isometry3<f64>,
-    pub collision_shape: i32,
-    pub visual_shape: i32,
+    pub collision_shape: CollisionId,
+    pub visual_shape: VisualId,
     pub inertial_pose: na::Isometry3<f64>,
-}
-
-impl Default for MultiBodyBase {
-    fn default() -> Self {
-        Self {
-            mass: 0.0,
-            pose: na::Isometry3::identity(),
-            collision_shape: -1,
-            visual_shape: -1,
-            inertial_pose: na::Isometry3::identity(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct MultiBodyLink {
     pub mass: f64,
-    pub collision_shape: i32,
-    pub visual_shape: i32,
+    pub collision_shape: CollisionId,
+    pub visual_shape: VisualId,
     pub parent_index: Option<usize>,
     pub joint_type: i32,
     pub joint_axis: [f64; 3],
     pub parent_transform: na::Isometry3<f64>,
     pub inertial_transform: na::Isometry3<f64>,
-}
-
-impl Default for MultiBodyLink {
-    fn default() -> Self {
-        Self {
-            mass: 0.0,
-            collision_shape: -1,
-            visual_shape: -1,
-            parent_index: None,
-            joint_type: 0,
-            joint_axis: [0.0; 3],
-            parent_transform: na::Isometry3::identity(),
-            inertial_transform: na::Isometry3::identity(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -630,7 +624,7 @@ pub struct MultiBodyCreateOptions<'a> {
     pub batch_transforms: Option<&'a [na::Isometry3<f64>]>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConstraintCreateOptions {
     pub parent_body: i32,
     pub parent_link: Option<usize>,
@@ -688,10 +682,8 @@ pub struct TextureData<'a> {
     pub rgb_pixels: &'a [u8],
 }
 
-#[derive(Debug, Clone)]
-pub struct TextureInfo {
-    pub texture_unique_id: i32,
-}
+#[derive(Debug, Clone, Copy)]
+pub struct TextureId(pub i32);
 
 // ### Bodies, Joints & Base State
 //
@@ -754,12 +746,13 @@ impl TryFrom<i32> for BodyType {
 }
 
 /// An enum to represent different types of joints
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone, Default)]
 pub enum JointType {
     Revolute = 0,
     Prismatic = 1,
     Spherical = 2,
     Planar = 3,
+    #[default]
     Fixed = 4,
     Point2Point = 5,
     Gear = 6,
@@ -1285,8 +1278,15 @@ pub struct CameraImage {
     pub segmentation_mask: Vec<i32>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Renderer {
+    TinyRenderer = 1 << 16,
+    /// Direct mode has no OpenGL, so you can not use this setting in direct mode.
+    BulletHardwareOpenGl = 1 << 17,
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct CameraImageRequest {
+pub struct CameraImageOptions {
     pub width: i32,
     pub height: i32,
     pub view_matrix: Option<[f32; 16]>,
@@ -1298,13 +1298,13 @@ pub struct CameraImageRequest {
     pub light_ambient_coeff: Option<f32>,
     pub light_diffuse_coeff: Option<f32>,
     pub light_specular_coeff: Option<f32>,
-    pub renderer: Option<i32>,
+    pub renderer: Option<Renderer>,
     pub flags: Option<i32>,
     pub projective_texture_view: Option<[f32; 16]>,
     pub projective_texture_projection: Option<[f32; 16]>,
 }
 
-impl CameraImageRequest {
+impl CameraImageOptions {
     pub fn new(width: i32, height: i32) -> Self {
         Self {
             width,
@@ -1685,8 +1685,8 @@ bitflags::bitflags! {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct StateLoggingOptions<'a> {
-    pub object_unique_ids: Option<&'a [i32]>,
+pub struct StateLoggingOptions {
+    pub object_unique_ids: Option<Vec<i32>>,
     pub max_log_dof: Option<i32>,
     pub body_unique_id_a: Option<i32>,
     pub body_unique_id_b: Option<i32>,
@@ -1694,6 +1694,12 @@ pub struct StateLoggingOptions<'a> {
     pub link_index_b: Option<i32>,
     pub device_type_filter: Option<i32>,
     pub log_flags: Option<LogFlags>,
+}
+
+impl From<()> for StateLoggingOptions {
+    fn from(_: ()) -> Self {
+        Self::default()
+    }
 }
 
 #[derive(Debug, Clone)]
