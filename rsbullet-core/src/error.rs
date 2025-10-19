@@ -1,5 +1,8 @@
 use std::ffi::NulError;
 use std::fmt::{Display, Formatter};
+use std::io;
+
+use robot_behavior::{PhysicsEngineException, RobotException};
 
 /// Represents failures that can occur while interacting with the Bullet physics server.
 #[derive(Debug)]
@@ -50,3 +53,59 @@ impl From<NulError> for BulletError {
 }
 
 pub type BulletResult<T> = Result<T, BulletError>;
+
+impl From<io::Error> for BulletError {
+    fn from(e: io::Error) -> Self {
+        BulletError::CommandFailed {
+            message: "IO Error occurred",
+            code: e.raw_os_error().unwrap_or(-1),
+        }
+    }
+}
+
+impl From<BulletError> for PhysicsEngineException {
+    fn from(e: BulletError) -> Self {
+        match e {
+            BulletError::NullPointer(msg) => PhysicsEngineException::ServerUnavailable(msg),
+            BulletError::ServerUnavailable(msg) => PhysicsEngineException::ServerUnavailable(msg),
+            BulletError::UnexpectedStatus { expected, actual } => {
+                PhysicsEngineException::CommandFailed(Box::leak(
+                    format!("Unexpected status with: expected={expected}, actual={actual}")
+                        .into_boxed_str(),
+                ))
+            }
+            BulletError::CommandFailed { message, code } => PhysicsEngineException::CommandFailed(
+                Box::leak(format!("{message} (code={code})").into_boxed_str()),
+            ),
+            BulletError::UnknownType(msg) => PhysicsEngineException::UnknownType(msg),
+            BulletError::CString(_) => PhysicsEngineException::NoException,
+        }
+    }
+}
+
+impl From<PhysicsEngineException> for BulletError {
+    fn from(e: PhysicsEngineException) -> Self {
+        match e {
+            PhysicsEngineException::ServerUnavailable(msg) => BulletError::ServerUnavailable(msg),
+            PhysicsEngineException::CommandFailed(msg) => BulletError::CommandFailed {
+                message: msg,
+                code: -1,
+            },
+            PhysicsEngineException::UnknownType(msg) => BulletError::UnknownType(msg),
+            PhysicsEngineException::NoException => BulletError::CommandFailed {
+                message: "No exception",
+                code: -1,
+            },
+            PhysicsEngineException::Other(e) => BulletError::CommandFailed {
+                message: Box::leak(e.into_boxed_str()),
+                code: -1,
+            },
+        }
+    }
+}
+
+impl From<BulletError> for RobotException {
+    fn from(e: BulletError) -> Self {
+        RobotException::CommandException(e.to_string())
+    }
+}

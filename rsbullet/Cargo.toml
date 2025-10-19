@@ -26,6 +26,9 @@ exclude = [
 rsbullet-core = { version = "0.2.1", path = "../rsbullet-core" }
 rsbullet_sys = { version = "0.2.1", path = "../rsbullet-sys" }
 nalgebra = { version = "0.34.1" }
+robot_behavior = "0.4.8"
+roplat_exrobot = "0.1.0"
+
 
 [features]
 default = []

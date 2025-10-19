@@ -1,4 +1,9 @@
 [workspace]
-members = ["rsbullet","rsbullet-core","rsbullet-sys"]
+members = ["rsbullet", "rsbullet-core", "rsbullet-sys"]
+exclude = ["./robot_behavior"]
 
 resolver = "3"
+
+[patch.crates-io]
+robot_behavior = { path = "./robot_behavior" }
+roplat_exrobot = { path = "./roplat_exrobot" }

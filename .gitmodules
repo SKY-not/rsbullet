@@ -1,3 +1,9 @@
 [submodule "rsbullet-sys/bullet3"]
 	path = rsbullet-sys/bullet3
 	url = git@github.com:bulletphysics/bullet3.git
+[submodule "robot_behavior"]
+	path = robot_behavior
+	url = git@github.com:Robot-Exp-Platform/robot_behavior.git
+[submodule "roplat_exrobot"]
+	path = roplat_exrobot
+	url = git@github.com:Robot-Exp-Platform/roplat_exrobot.git

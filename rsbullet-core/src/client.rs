@@ -12,6 +12,7 @@ use std::{
 };
 
 use nalgebra as na;
+use robot_behavior::utils::*;
 use rsbullet_sys as ffi;
 
 use crate::error::{BulletError, BulletResult};
@@ -2366,12 +2367,12 @@ impl PhysicsClient {
         Ok(())
     }
 
-    pub fn set_joint_motor_control_array<const N: usize>(
+    pub fn set_joint_motor_control_array(
         &mut self,
         body_unique_id: i32,
-        joint_index: [i32; N],
-        control_mode: ControlModeArray<N>,
-        maximum_force: Option<[f64; N]>,
+        joint_index: &[i32],
+        control_mode: ControlModeArray<'_>,
+        maximum_force: Option<&[f64]>,
     ) -> BulletResult<()> {
         if joint_index.is_empty() {
             return Ok(());
@@ -2381,76 +2382,156 @@ impl PhysicsClient {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
 
-        let force = maximum_force.unwrap_or([100000.; N]);
-        let kp = 0.1;
-        let kd = 1.0;
-        let target_velocity = 0.;
+        const DEFAULT_FORCE: f64 = 100000.0;
+        const DEFAULT_KP: f64 = 0.1;
+        const DEFAULT_KD: f64 = 1.0;
+        const DEFAULT_TARGET_VELOCITY: f64 = 0.0;
 
-        unsafe {
-            match control_mode {
-                ControlModeArray::Position(target) => {
-                    for i in 0..N {
-                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
+        let joint_count = joint_index.len();
 
-                        ffi::b3JointControlSetDesiredPosition(command, info.q_index, target[i]);
+        match control_mode {
+            ControlModeArray::Position(targets) => {
+                if targets.len() != joint_count {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and position target lengths differ",
+                        code: -1,
+                    });
+                }
+                if let Some(forces) = maximum_force
+                    && forces.len() != joint_count
+                {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and maximum force lengths differ",
+                        code: -1,
+                    });
+                }
 
-                        ffi::b3JointControlSetKp(command, info.u_index, kp);
+                for (i, joint) in joint_index.iter().copied().enumerate() {
+                    let info = self.get_joint_info(body_unique_id, joint)?;
+                    unsafe {
+                        ffi::b3JointControlSetDesiredPosition(command, info.q_index, targets[i]);
+                        ffi::b3JointControlSetKp(command, info.u_index, DEFAULT_KP);
                         ffi::b3JointControlSetDesiredVelocity(
                             command,
                             info.u_index,
-                            target_velocity,
+                            DEFAULT_TARGET_VELOCITY,
                         );
-
-                        ffi::b3JointControlSetKd(command, info.u_index, kd);
-                        ffi::b3JointControlSetMaximumForce(command, info.u_index, force[i]);
+                        ffi::b3JointControlSetKd(command, info.u_index, DEFAULT_KD);
+                        ffi::b3JointControlSetMaximumForce(
+                            command,
+                            info.u_index,
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                        );
                     }
                 }
-                ControlModeArray::Pd {
-                    target_position: pos,
-                    target_velocity: vel,
-                    position_gain: kp,
-                    velocity_gain: kd,
-                    maximum_velocity: max_vel,
+            }
+            ControlModeArray::Pd {
+                target_position: pos,
+                target_velocity: vel,
+                position_gain: kp,
+                velocity_gain: kd,
+                maximum_velocity: max_vel,
+            }
+            | ControlModeArray::StablePd {
+                target_position: pos,
+                target_velocity: vel,
+                position_gain: kp,
+                velocity_gain: kd,
+                maximum_velocity: max_vel,
+            } => {
+                if pos.len() != joint_count
+                    || vel.len() != joint_count
+                    || kp.len() != joint_count
+                    || kd.len() != joint_count
+                {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and PD target lengths differ",
+                        code: -1,
+                    });
                 }
-                | ControlModeArray::StablePd {
-                    target_position: pos,
-                    target_velocity: vel,
-                    position_gain: kp,
-                    velocity_gain: kd,
-                    maximum_velocity: max_vel,
-                } => {
-                    for i in 0..N {
-                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
-                        if let Some(max_vel) = max_vel {
+                if let Some(max_velocities) = max_vel
+                    && max_velocities.len() != joint_count
+                {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and maximum velocity lengths differ",
+                        code: -1,
+                    });
+                }
+
+                if let Some(forces) = maximum_force
+                    && forces.len() != joint_count
+                {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and maximum force lengths differ",
+                        code: -1,
+                    });
+                }
+
+                for (i, joint) in joint_index.iter().copied().enumerate() {
+                    let info = self.get_joint_info(body_unique_id, joint)?;
+                    if let Some(max_velocities) = max_vel {
+                        unsafe {
                             ffi::b3JointControlSetMaximumVelocity(
                                 command,
                                 info.u_index,
-                                max_vel[i],
+                                max_velocities[i],
                             );
                         }
+                    }
+                    unsafe {
                         ffi::b3JointControlSetDesiredPosition(command, info.q_index, pos[i]);
-
                         ffi::b3JointControlSetKp(command, info.u_index, kp[i]);
                         ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel[i]);
-
                         ffi::b3JointControlSetKd(command, info.u_index, kd[i]);
-                        ffi::b3JointControlSetMaximumForce(command, info.u_index, force[i]);
+                        ffi::b3JointControlSetMaximumForce(
+                            command,
+                            info.u_index,
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                        );
                     }
                 }
-                ControlModeArray::Velocity(vel) => {
-                    for i in 0..N {
-                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
+            }
+            ControlModeArray::Velocity(velocities) => {
+                if velocities.len() != joint_count {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and velocity target lengths differ",
+                        code: -1,
+                    });
+                }
+                if let Some(forces) = maximum_force
+                    && forces.len() != joint_count
+                {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and maximum force lengths differ",
+                        code: -1,
+                    });
+                }
 
-                        ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel[i]);
-                        ffi::b3JointControlSetKd(command, info.u_index, kd);
-                        ffi::b3JointControlSetMaximumForce(command, info.u_index, force[i]);
+                for (i, joint) in joint_index.iter().copied().enumerate() {
+                    let info = self.get_joint_info(body_unique_id, joint)?;
+                    unsafe {
+                        ffi::b3JointControlSetDesiredVelocity(command, info.u_index, velocities[i]);
+                        ffi::b3JointControlSetKd(command, info.u_index, DEFAULT_KD);
+                        ffi::b3JointControlSetMaximumForce(
+                            command,
+                            info.u_index,
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                        );
                     }
                 }
-                ControlModeArray::Torque(f) => {
-                    for i in 0..N {
-                        let info = self.get_joint_info(body_unique_id, joint_index[i])?;
+            }
+            ControlModeArray::Torque(forces) => {
+                if forces.len() != joint_count {
+                    return Err(BulletError::CommandFailed {
+                        message: "Joint index and torque lengths differ",
+                        code: -1,
+                    });
+                }
 
-                        ffi::b3JointControlSetDesiredForceTorque(command, info.u_index, f[i]);
+                for (force, joint) in forces.iter().copied().zip(joint_index.iter().copied()) {
+                    let info = self.get_joint_info(body_unique_id, joint)?;
+                    unsafe {
+                        ffi::b3JointControlSetDesiredForceTorque(command, info.u_index, force);
                     }
                 }
             }
@@ -2759,7 +2840,7 @@ impl PhysicsClient {
         &mut self,
         body_unique_id: i32,
         end_effector_link_index: i32,
-        target_position: [f64; 3],
+        target_position: impl Into<na::Isometry3<f64>>,
         options: &InverseKinematicsOptions<'_>,
     ) -> BulletResult<Vec<f64>> {
         self.ensure_can_submit()?;
@@ -2771,12 +2852,13 @@ impl PhysicsClient {
             });
         }
         let dof_usize = dof as usize;
+        let (tran, rot) = isometry_to_raw_parts(&target_position.into());
 
         let command =
             unsafe { ffi::b3CalculateInverseKinematicsCommandInit(self.handle, body_unique_id) };
-        if let Some(solver) = options.solver {
-            unsafe { ffi::b3CalculateInverseKinematicsSelectSolver(command, solver) };
-        }
+
+        unsafe { ffi::b3CalculateInverseKinematicsSelectSolver(command, options.solver as i32) };
+
         if let Some(current_positions) = options.current_positions {
             if current_positions.len() != dof_usize {
                 return Err(BulletError::CommandFailed {
@@ -2814,42 +2896,23 @@ impl PhysicsClient {
 
         unsafe {
             if has_nullspace {
-                if let Some(orientation) = options.target_orientation {
-                    ffi::b3CalculateInverseKinematicsPosOrnWithNullSpaceVel(
-                        command,
-                        dof,
-                        end_effector_link_index,
-                        target_position.as_ptr(),
-                        orientation.as_ptr(),
-                        options.lower_limits.unwrap().as_ptr(),
-                        options.upper_limits.unwrap().as_ptr(),
-                        options.joint_ranges.unwrap().as_ptr(),
-                        options.rest_poses.unwrap().as_ptr(),
-                    );
-                } else {
-                    ffi::b3CalculateInverseKinematicsPosWithNullSpaceVel(
-                        command,
-                        dof,
-                        end_effector_link_index,
-                        target_position.as_ptr(),
-                        options.lower_limits.unwrap().as_ptr(),
-                        options.upper_limits.unwrap().as_ptr(),
-                        options.joint_ranges.unwrap().as_ptr(),
-                        options.rest_poses.unwrap().as_ptr(),
-                    );
-                }
-            } else if let Some(orientation) = options.target_orientation {
+                ffi::b3CalculateInverseKinematicsPosOrnWithNullSpaceVel(
+                    command,
+                    dof,
+                    end_effector_link_index,
+                    tran.as_ptr(),
+                    rot.as_ptr(),
+                    options.lower_limits.unwrap().as_ptr(),
+                    options.upper_limits.unwrap().as_ptr(),
+                    options.joint_ranges.unwrap().as_ptr(),
+                    options.rest_poses.unwrap().as_ptr(),
+                );
+            } else {
                 ffi::b3CalculateInverseKinematicsAddTargetPositionWithOrientation(
                     command,
                     end_effector_link_index,
-                    target_position.as_ptr(),
-                    orientation.as_ptr(),
-                );
-            } else {
-                ffi::b3CalculateInverseKinematicsAddTargetPurePosition(
-                    command,
-                    end_effector_link_index,
-                    target_position.as_ptr(),
+                    tran.as_ptr(),
+                    rot.as_ptr(),
                 );
             }
         }

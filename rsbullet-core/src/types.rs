@@ -1061,41 +1061,41 @@ impl ControlMode {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum ControlModeArray<const N: usize> {
+pub enum ControlModeArray<'a> {
     /// Velocity control with the desired joint velocity
-    Velocity([f64; N]),
+    Velocity(&'a [f64]),
     /// Torque control with the desired joint torque.
-    Torque([f64; N]),
+    Torque(&'a [f64]),
     /// Position Control with the desired joint position.
-    Position([f64; N]),
+    Position(&'a [f64]),
     /// PD Control
     Pd {
         /// desired target position
-        target_position: [f64; N],
+        target_position: &'a [f64],
         /// desired target velocity
-        target_velocity: [f64; N],
+        target_velocity: &'a [f64],
         /// position gain
-        position_gain: [f64; N],
+        position_gain: &'a [f64],
         /// velocity gain
-        velocity_gain: [f64; N],
+        velocity_gain: &'a [f64],
         /// limits the velocity of a joint
-        maximum_velocity: Option<[f64; N]>,
+        maximum_velocity: Option<&'a [f64]>,
     },
     StablePd {
         /// desired target position
-        target_position: [f64; N],
+        target_position: &'a [f64],
         /// desired target velocity
-        target_velocity: [f64; N],
+        target_velocity: &'a [f64],
         /// position gain
-        position_gain: [f64; N],
+        position_gain: &'a [f64],
         /// velocity gain
-        velocity_gain: [f64; N],
+        velocity_gain: &'a [f64],
         /// limits the velocity of a joint
-        maximum_velocity: Option<[f64; N]>,
+        maximum_velocity: Option<&'a [f64]>,
     },
 }
 
-impl<const N: usize> ControlModeArray<N> {
+impl<'a> ControlModeArray<'a> {
     pub fn as_raw(self) -> i32 {
         match self {
             ControlModeArray::Velocity(_) => 0,
@@ -1250,18 +1250,29 @@ impl std::ops::DerefMut for MassMatrix {
     }
 }
 
+/// Specifies which Inverse Kinematics Solver to use in
+/// [`calculate_inverse_kinematics()`](`crate::client::PhysicsClient::calculate_inverse_kinematics()`)
+#[derive(Debug, Default, Clone, Copy)]
+pub enum IkSolver {
+    /// Damped Least Squares
+    #[default]
+    Dls = 0,
+    /// Selective Damped Least
+    Sdls = 1,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct InverseKinematicsOptions<'a> {
-    pub target_orientation: Option<[f64; 4]>,
+    pub joint_damping: Option<&'a [f64]>,
+    pub current_positions: Option<&'a [f64]>,
+    pub solver: IkSolver,
+    pub max_iterations: Option<i32>,
+    pub residual_threshold: Option<f64>,
+
     pub lower_limits: Option<&'a [f64]>,
     pub upper_limits: Option<&'a [f64]>,
     pub joint_ranges: Option<&'a [f64]>,
     pub rest_poses: Option<&'a [f64]>,
-    pub joint_damping: Option<&'a [f64]>,
-    pub current_positions: Option<&'a [f64]>,
-    pub solver: Option<i32>,
-    pub max_iterations: Option<i32>,
-    pub residual_threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1827,44 +1838,4 @@ pub struct PluginCommandReturnData {
 pub struct PluginCommandResult {
     pub status: i32,
     pub return_data: Option<PluginCommandReturnData>,
-}
-
-/// Build an `Isometry3` from position array and orientation quaternion in XYZW order.
-pub fn isometry_from_raw_parts(
-    position: [f64; 3],
-    orientation_xyzw: [f64; 4],
-) -> na::Isometry3<f64> {
-    let translation = na::Translation3::new(position[0], position[1], position[2]);
-    let quaternion = na::Quaternion::new(
-        orientation_xyzw[3],
-        orientation_xyzw[0],
-        orientation_xyzw[1],
-        orientation_xyzw[2],
-    );
-    let rotation = na::UnitQuaternion::from_quaternion(quaternion);
-    na::Isometry3::from_parts(translation, rotation)
-}
-
-/// Build an `Isometry3` from a `[position, orientation]` frame slice.
-pub fn isometry_from_frame(frame: &[f64; 7]) -> na::Isometry3<f64> {
-    isometry_from_raw_parts(
-        [frame[0], frame[1], frame[2]],
-        [frame[3], frame[4], frame[5], frame[6]],
-    )
-}
-
-/// Extract translation (XYZ) and quaternion (XYZW) components from an `Isometry3`.
-pub fn isometry_to_raw_parts(transform: &na::Isometry3<f64>) -> ([f64; 3], [f64; 4]) {
-    let rotation = transform.rotation;
-    (
-        transform.translation.into(),
-        [rotation.i, rotation.j, rotation.k, rotation.w],
-    )
-}
-
-/// Write an `Isometry3` into a `[position, orientation]` frame buffer.
-pub fn isometry_write_to_frame(transform: &na::Isometry3<f64>, frame: &mut [f64; 7]) {
-    let (position, orientation) = isometry_to_raw_parts(transform);
-    frame[..3].copy_from_slice(&position);
-    frame[3..7].copy_from_slice(&orientation);
 }
