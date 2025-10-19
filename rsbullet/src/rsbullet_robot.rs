@@ -52,7 +52,7 @@ impl<'a, R: RobotFile> RsBulletRobotBuilder<'a, R> {
         RsBulletRobotBuilder {
             _marker: PhantomData,
             _rsbullet,
-            load_file: R::urdf_collision_file(),
+            load_file: R::URDF,
             base: None,
             base_fixed: false,
             scaling: None,
@@ -74,8 +74,8 @@ impl<R> RsBulletRobotBuilder<'_, R> {
 }
 
 impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R> {
-    fn base(mut self, base: nalgebra::Isometry3<f64>) -> Self {
-        self.base = Some(base);
+    fn base(mut self, base: impl Into<nalgebra::Isometry3<f64>>) -> Self {
+        self.base = Some(base.into());
         self
     }
     fn base_fixed(mut self, base_fixed: bool) -> Self {
@@ -256,7 +256,7 @@ where
             let target = path_generate(duration);
             client.set_joint_motor_control_array(
                 body_id,
-                &joint_indices,
+                &joint_indices[1..=N],
                 ControlModeArray::Position(&target),
                 None,
             )?;
@@ -326,7 +326,7 @@ where
 
             client.set_joint_motor_control_array(
                 body_id,
-                &joint_indices,
+                &joint_indices[1..=N],
                 ControlModeArray::Position(&solution[..joint_indices.len()]),
                 None,
             )?;

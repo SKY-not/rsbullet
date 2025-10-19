@@ -2537,10 +2537,7 @@ impl PhysicsClient {
             }
         }
 
-        self.submit_simple_command(
-            command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
-        )?;
+        self.submit_command(command)?;
         Ok(())
     }
 

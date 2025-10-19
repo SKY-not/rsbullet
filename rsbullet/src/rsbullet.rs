@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub struct RsBullet {
-    client: PhysicsClient,
+    pub client: PhysicsClient,
     command_tx: mpsc::Sender<QueuedControl>,
     command_rx: mpsc::Receiver<QueuedControl>,
     active_controls: Vec<QueuedControl>,
@@ -84,6 +84,13 @@ impl PhysicsEngine for RsBullet {
         self.client.set_gravity(gravity)?;
         Ok(self)
     }
+    fn set_additional_search_path(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> PhysicsEngineResult<&mut Self> {
+        self.client.set_additional_search_path(path)?;
+        Ok(self)
+    }
 }
 
 impl PhysicsEngineRobot for RsBullet {
@@ -93,7 +100,7 @@ impl PhysicsEngineRobot for RsBullet {
         RsBulletRobotBuilder {
             _marker: PhantomData,
             _rsbullet: self,
-            load_file: R::urdf_collision_file(),
+            load_file: R::URDF,
             base: None,
             base_fixed: false,
             scaling: None,

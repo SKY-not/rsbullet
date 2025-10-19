@@ -109,3 +109,12 @@ impl From<BulletError> for RobotException {
         RobotException::CommandException(e.to_string())
     }
 }
+
+impl From<RobotException> for BulletError {
+    fn from(value: RobotException) -> Self {
+        BulletError::CommandFailed {
+            message: Box::leak(value.to_string().into_boxed_str()),
+            code: -1,
+        }
+    }
+}
