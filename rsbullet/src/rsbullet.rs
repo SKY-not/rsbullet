@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::mpsc, time::Duration};
 
-use robot_behavior::{PhysicsEngine, PhysicsEngineResult, PhysicsEngineRobot, Renderer, RobotFile};
+use robot_behavior::{PhysicsEngine, PhysicsEngineResult, PhysicsEngineRobot, RobotFile};
 use rsbullet_core::{BulletResult, Mode, PhysicsClient};
 
 use crate::{
@@ -96,7 +96,10 @@ impl PhysicsEngine for RsBullet {
 impl PhysicsEngineRobot for RsBullet {
     type PR<R> = RsBulletRobot<R>;
     type RB<'a, R: RobotFile> = RsBulletRobotBuilder<'a, R>;
-    fn robot_builder<'a, R: RobotFile>(&'a mut self) -> RsBulletRobotBuilder<'a, R> {
+    fn robot_builder<'a, R: RobotFile>(
+        &'a mut self,
+        _name: impl ToString,
+    ) -> RsBulletRobotBuilder<'a, R> {
         RsBulletRobotBuilder {
             _marker: PhantomData,
             _rsbullet: self,
@@ -110,7 +113,15 @@ impl PhysicsEngineRobot for RsBullet {
     }
 }
 
-impl Renderer for RsBullet {}
+// impl Renderer for RsBullet {
+//     fn set_additional_search_path(
+//         &mut self,
+//         path: impl AsRef<std::path::Path>,
+//     ) -> RendererResult<&mut Self> {
+//         self.client.set_additional_search_path(path)?;
+//         Ok(self)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -125,7 +136,7 @@ mod tests {
     fn add_robot() {
         let mut engine = RsBullet::new(Mode::Direct).unwrap();
         let mut _robot1 = engine
-            .robot_builder::<ExRobot<6>>()
+            .robot_builder::<ExRobot<6>>("robot1")
             .base(na::Isometry3::identity())
             .base_fixed(true)
             .scaling(1.0)
@@ -133,7 +144,7 @@ mod tests {
             .unwrap();
 
         let mut _robot1 = engine
-            .robot_builder::<ExRobot<6>>()
+            .robot_builder::<ExRobot<6>>("robot1")
             .base(na::Isometry3::identity())
             .base_fixed(true)
             .scaling(1.0)

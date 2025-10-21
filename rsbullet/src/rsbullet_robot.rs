@@ -2,11 +2,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{marker::PhantomData, sync::mpsc::Sender};
 
+use anyhow::Result;
 use robot_behavior::behavior::{Arm, ArmParam, ArmPreplannedMotionImpl};
 use robot_behavior::utils::{isometry_to_raw_parts, path_generate};
 use robot_behavior::{
-    ArmState, Coord, LoadState, PhysicsEngineResult, Pose, RobotBuilder, RobotException, RobotFile,
-    RobotResult,
+    ArmState, Coord, LoadState, Pose, RobotBuilder, RobotException, RobotFile, RobotResult,
 };
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, LoadModelFlags,
@@ -17,22 +17,23 @@ use crate::RsBullet;
 use crate::types::{QueuedControl, RsBulletRobotState};
 
 pub struct RsBulletRobot<R> {
-    pub(crate) body_id: i32,
-    pub(crate) joint_indices: Vec<i32>,
+    pub body_id: i32,
+    pub joint_indices: Vec<i32>,
     pub(crate) command_sender: Sender<QueuedControl>,
-    pub(crate) end_effector_link: i32,
+    pub end_effector_link: i32,
     state_cache: Arc<Mutex<RsBulletRobotState>>,
     _marker: PhantomData<R>,
 }
 
 impl<R> RsBulletRobot<R> {
-    fn enqueue<CF>(&self, control: CF) -> BulletResult<()>
+    pub fn enqueue<CF>(&self, control: CF) -> anyhow::Result<()>
     where
         CF: FnMut(&mut PhysicsClient, Duration) -> BulletResult<bool> + Send + 'static,
     {
         self.command_sender
             .send(Box::new(control))
-            .map_err(|_| BulletError::ServerUnavailable("physics engine unavailable"))
+            .map_err(|_| anyhow::anyhow!("Failed to send control command: channel closed"))?;
+        Ok(())
     }
 }
 
@@ -74,6 +75,12 @@ impl<R> RsBulletRobotBuilder<'_, R> {
 }
 
 impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R> {
+    fn name(self, _: String) -> Self {
+        self
+    }
+    fn mesh_path(self, _: &'static str) -> Self {
+        self
+    }
     fn base(mut self, base: impl Into<nalgebra::Isometry3<f64>>) -> Self {
         self.base = Some(base.into());
         self
@@ -86,7 +93,7 @@ impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R
         self.scaling = Some(scaling);
         self
     }
-    fn load(self) -> PhysicsEngineResult<RsBulletRobot<R>> {
+    fn load(self) -> Result<RsBulletRobot<R>> {
         let body_id = self._rsbullet.client_mut().load_urdf(
             self.load_file,
             Some(UrdfOptions {

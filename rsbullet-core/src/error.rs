@@ -2,7 +2,7 @@ use std::ffi::NulError;
 use std::fmt::{Display, Formatter};
 use std::io;
 
-use robot_behavior::{PhysicsEngineException, RobotException};
+use robot_behavior::{PhysicsEngineException, RendererException, RobotException};
 
 /// Represents failures that can occur while interacting with the Bullet physics server.
 #[derive(Debug)]
@@ -97,6 +97,47 @@ impl From<PhysicsEngineException> for BulletError {
                 code: -1,
             },
             PhysicsEngineException::Other(e) => BulletError::CommandFailed {
+                message: Box::leak(e.into_boxed_str()),
+                code: -1,
+            },
+        }
+    }
+}
+
+impl From<BulletError> for RendererException {
+    fn from(e: BulletError) -> Self {
+        match e {
+            BulletError::NullPointer(msg) => RendererException::ServerUnavailable(msg),
+            BulletError::ServerUnavailable(msg) => RendererException::ServerUnavailable(msg),
+            BulletError::UnexpectedStatus { expected, actual } => {
+                RendererException::CommandFailed(Box::leak(
+                    format!("Unexpected status with: expected={expected}, actual={actual}")
+                        .into_boxed_str(),
+                ))
+            }
+            BulletError::CommandFailed { message, code } => RendererException::CommandFailed(
+                Box::leak(format!("{message} (code={code})").into_boxed_str()),
+            ),
+            BulletError::UnknownType(msg) => RendererException::UnknownType(msg),
+            BulletError::CString(_) => RendererException::NoException,
+        }
+    }
+}
+
+impl From<RendererException> for BulletError {
+    fn from(e: RendererException) -> Self {
+        match e {
+            RendererException::ServerUnavailable(msg) => BulletError::ServerUnavailable(msg),
+            RendererException::CommandFailed(msg) => BulletError::CommandFailed {
+                message: msg,
+                code: -1,
+            },
+            RendererException::UnknownType(msg) => BulletError::UnknownType(msg),
+            RendererException::NoException => BulletError::CommandFailed {
+                message: "No exception",
+                code: -1,
+            },
+            RendererException::Other(e) => BulletError::CommandFailed {
                 message: Box::leak(e.into_boxed_str()),
                 code: -1,
             },
