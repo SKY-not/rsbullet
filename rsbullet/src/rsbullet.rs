@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::mpsc, time::Duration};
 
-use robot_behavior::{PhysicsEngine, PhysicsEngineResult, PhysicsEngineRobot, RobotFile};
+use robot_behavior::{AddRobot, PhysicsEngine, PhysicsEngineResult, RobotFile};
 use rsbullet_core::{BulletResult, Mode, PhysicsClient};
 
 use crate::{
@@ -93,7 +93,7 @@ impl PhysicsEngine for RsBullet {
     }
 }
 
-impl PhysicsEngineRobot for RsBullet {
+impl AddRobot for RsBullet {
     type PR<R> = RsBulletRobot<R>;
     type RB<'a, R: RobotFile> = RsBulletRobotBuilder<'a, R>;
     fn robot_builder<'a, R: RobotFile>(
@@ -126,7 +126,7 @@ impl PhysicsEngineRobot for RsBullet {
 #[cfg(test)]
 mod tests {
     use nalgebra as na;
-    use robot_behavior::{PhysicsEngineRobot, RobotBuilder};
+    use robot_behavior::{AddRobot, RobotBuilder};
     use roplat_exrobot::ExRobot;
     use rsbullet_core::{LoadModelFlags, Mode};
 

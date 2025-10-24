@@ -1,30 +1,14 @@
 # Readme
 
-This project is a fork of the [rubullet](https://github.com/neachdainn/rubullet) project. As the original repository has not been updated for over five years, further maintenance, updates, and customization requirements are being carried out here. The readme file of the original warehouse can be found below.
+This project is a fork of the [rubullet](https://github.com/neachdainn/rubullet) project. As the original repository has not been updated for over five years, further maintenance, updates, and customization requirements are being carried out here. The readme file of the original warehouse can be found [README_ORIGIN.md](./README_ORIGIN.md).
 
 Compared to the 100 APIs implemented in the original library, we have additionally implemented all the APIs in pybullet 3.2.7. This enables you to smoothly migrate from pybullet to rsbullet, simply by changing the API names to snake_case. you can read API documentation in the [RSBULLET_API_REFERENCE.md](./RSBULLET_API_REFERENCE.md).
 
-We have prepared a series of examples which can be referred to [examples](./rsbullet/examples).
+## Overview
 
----
+### `PhysicsClient` : do everything `PyBullet` can do
 
-![GitHub Workflow Status](https://img.shields.io/github/workflow/status/neachdainn/rubullet/Rust)
-[![crates.io](https://img.shields.io/crates/v/rubullet.svg)](https://crates.io/crates/rubullet)
-[![crates.io](https://img.shields.io/crates/l/rubullet.svg)](https://crates.io/crates/rubullet)
-[![crates.io](https://img.shields.io/crates/d/rubullet.svg)](https://crates.io/crates/rubullet)
-[![docs.rs](https://docs.rs/rubullet/badge.svg)](https://docs.rs/rubullet)
-
-# RuBullet
-
-RuBullet is a Rust implementation of [PyBullet](https://pybullet.org/).
-In other words, it uses the [Bullet3](https://github.com/bulletphysics/bullet3)
-C API in order to expose a functionality that is similar to PyBullet.
-Development is ongoing and functionality is currently limited.
-![](https://i.imgur.com/UonCX5F.png)
-
-## Status
-
-Right now RuBullet should cover most of the basic use cases. It can:
+In **Rsbullet** you can use the `PhysicsClient` to get features similar to those in PyBullet:
 
 * Create a PhysicsClient in Direct, Gui or other modes
 * Load models from URDF, SDF, MuJoCo or Bullet files
@@ -42,59 +26,49 @@ Right now RuBullet should cover most of the basic use cases. It can:
 * Set physics engine parameters
 * Collision Detection Queries
 * Deformables and Cloth
-
-Things which are not implemented yet:
-
 * Everything MultiDOF related
 * Virtual Reality
 * Plugins
 
-The API is unstable and subject to change.
+We have prepared a series of examples which can be referred to [examples](./rsbullet/examples).Some of the examples are exactly the same as those in pubullet, which can serve as a standard reference for your migration.
 
-# Example
+### `Rsbullet` : more features. User-friendly, Simple-interface， Abstraction and More Rustly
+
+Furthermore, we have provided `RsBullet` to achieve functions that `Pybullet` does not have, in order to fully adapt to the features and convenience brought by Rust.
+
+A examples of `Rsbullet` features:
 
 ```rust
-use std::{thread, time::Duration};
-
-use anyhow::Result;
-use nalgebra::{Isometry3, Vector3};
-use rubullet::*;
+use libjaka::JakaMini2;
+use robot_behavior::behavior::*;
+use rsbullet::{Mode, RsBullet};
 
 fn main() -> Result<()> {
-    let mut physics_client = PhysicsClient::connect(Mode::Gui)?;
+    let mut physics = RsBullet::new(Mode::Gui)?;
+    physics
+        .set_additional_search_path("E:\\yixing\\code\\Robot-Exp\\drives\\asserts")?
+        .set_gravity([0., 0., -10.])?
+        .set_step_time(Duration::from_secs_f64(1. / 240.))?;
 
-    physics_client.set_additional_search_path("../rubullet-sys/bullet3/libbullet3/data")?;
-    physics_client.set_gravity(Vector3::new(0.0, 0.0, -10.0));
+    let mut robot_1 = physics
+        .robot_builder::<JakaMini2>("robot_1")
+        .base([0.0, 0.2, 0.0])
+        .base_fixed(true)
+        .load()?;
 
-    let _plane_id = physics_client.load_urdf("plane.urdf", Default::default())?;
-
-    let cube_start_position = Isometry3::translation(0.0, 0.0, 1.0);
-    let box_id = physics_client.load_urdf(
-        "r2d2.urdf",
-        UrdfOptions {
-            base_transform: cube_start_position,
-            ..Default::default()
-        },
-    )?;
-
-    for _ in 0..10000 {
-        physics_client.step_simulation()?;
-        thread::sleep(Duration::from_micros(4167));
+    // a s-curve motion
+    robot_1
+        .with_velocity(&[5.; 6])
+        .with_acceleration(&[2.; 6])
+        .move_joint(&[0.; 6])?;
+    
+    loop {
+        physics.step()?;
+        sleep(Duration::from_secs_f64(0.01));
     }
-
-    let cube_transform = physics_client.get_base_transform(box_id)?;
-    println!("{}", cube_transform);
-
-    Ok(())
 }
 ```
 
-## Bug reports and Merge Requests
+In `Pybullet`, to control a robot, you need to get the robot's unique ID first, and then call various functions with the ID as a parameter. In `Rsbullet`, you can directly create a robot object through the `robot_builder` method of `Rsbullet`, and then call the robot's methods in `robot_behavior` to control it. The robot object will automatically manage its own ID internally, making it more convenient to use.
 
-The current development happens as a part of marcbone's master thesis. Therefore, merge requests can not be accepted until
-July 5, 2021. We are disabling merge requests until then which sadly also disables issues. If you find any bugs or have suggestions please write an email to
-one of the maintainers.
-
-## License
-
-RuBullet is licensed under MIT
+Enjoy it!
