@@ -52,22 +52,19 @@ fn main() -> BulletResult<()> {
             file: "duck.obj",
             scale: mesh_scale,
         },
-        VisualShapeOptions {
+        Some(VisualShapeOptions {
             transform: shift.into(),
             rgba: [1., 1., 1., 1.],
             specular: [0.4, 0.4, 0.],
             flags: None,
-        },
+        }),
     )?;
     let collision_shape = client.create_collision_shape(
         &CollisionGeometry::MeshFile {
             file: "duck_vhacd.obj",
             scale: mesh_scale,
         },
-        CollisionShapeOptions {
-            transform: shift.into(),
-            flags: None,
-        },
+        Some(na::Isometry3::from(shift)),
     )?;
 
     let range_x = 3;

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use nalgebra as na;
+use robot_behavior::Entity;
 use rsbullet_sys::{self as ffi, b3JointInfo, b3KeyboardEvent, b3LinkState, b3MouseEvent};
 
 use crate::{BulletError, PhysicsClient};
@@ -478,6 +479,29 @@ pub enum CollisionGeometry<'a> {
     },
 }
 
+impl<'a> From<Entity<'a>> for CollisionGeometry<'a> {
+    fn from(entity: Entity<'a>) -> Self {
+        match entity {
+            Entity::Sphere { radius } => Self::Sphere { radius },
+            Entity::Box { half_extents } => Self::Box { half_extents },
+            Entity::Capsule { radius, height } => Self::Capsule { radius, height },
+            Entity::Cylinder { radius, height } => Self::Cylinder { radius, height },
+            Entity::Plane { normal, constant } => Self::Plane { normal, constant },
+            Entity::MeshFile { file, scale } => Self::MeshFile { file, scale },
+            Entity::ConvexMesh { vertices, scale } => Self::ConvexMesh { vertices, scale },
+            Entity::Mesh {
+                vertices,
+                indices,
+                scale,
+            } => Self::Mesh {
+                vertices,
+                indices,
+                scale,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CollisionShapeOptions {
     pub transform: na::Isometry3<f64>,
@@ -557,6 +581,37 @@ pub enum VisualGeometry<'a> {
     },
 }
 
+impl<'a> From<Entity<'a>> for VisualGeometry<'a> {
+    fn from(entity: Entity<'a>) -> Self {
+        match entity {
+            Entity::Sphere { radius } => Self::Sphere { radius },
+            Entity::Box { half_extents } => Self::Box { half_extents },
+            Entity::Capsule { radius, height } => Self::Capsule { radius, height },
+            Entity::Cylinder { radius, height } => Self::Cylinder { radius, height },
+            Entity::Plane { normal, constant } => Self::Plane { normal, constant },
+            Entity::MeshFile { file, scale } => Self::Mesh { file, scale },
+            Entity::Mesh {
+                vertices,
+                indices,
+                scale,
+            } => Self::MeshData {
+                vertices,
+                indices: Some(indices),
+                normals: None,
+                uvs: None,
+                scale,
+            },
+            Entity::ConvexMesh { vertices, scale } => Self::MeshData {
+                vertices,
+                indices: None,
+                normals: None,
+                uvs: None,
+                scale,
+            },
+        }
+    }
+}
+
 bitflags::bitflags! {
     /// Experimental flags, best to ignore.
     #[derive(Debug, Clone, Copy)]
@@ -581,6 +636,15 @@ impl Default for VisualShapeOptions {
             specular: [1.0, 1.0, 1.0],
             flags: None,
             transform: na::Isometry3::identity(),
+        }
+    }
+}
+
+impl From<na::Isometry3<f64>> for VisualShapeOptions {
+    fn from(transform: na::Isometry3<f64>) -> Self {
+        Self {
+            transform,
+            ..Default::default()
         }
     }
 }

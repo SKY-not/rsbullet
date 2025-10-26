@@ -872,14 +872,15 @@ impl PhysicsClient {
     pub fn create_collision_shape(
         &mut self,
         geometry: &CollisionGeometry<'_>,
-        options: impl Into<Option<CollisionShapeOptions>>,
+        options: Option<impl Into<CollisionShapeOptions>>,
     ) -> BulletResult<i32> {
         self.ensure_can_submit()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
         let shape_index = self.add_collision_geometry(command, geometry, &mut scratch)?;
 
-        let CollisionShapeOptions { transform, flags } = options.into().unwrap_or_default();
+        let CollisionShapeOptions { transform, flags } =
+            options.map_or(CollisionShapeOptions::default(), Into::into);
 
         if let Some(flags) = flags {
             unsafe { ffi::b3CreateCollisionSetFlag(command, shape_index, flags) };
@@ -990,7 +991,7 @@ impl PhysicsClient {
     pub fn create_visual_shape(
         &mut self,
         geometry: &VisualGeometry<'_>,
-        options: impl Into<Option<VisualShapeOptions>>,
+        options: Option<impl Into<VisualShapeOptions>>,
     ) -> BulletResult<i32> {
         self.ensure_can_submit()?;
         let mut scratch = GeometryScratch::default();
@@ -998,7 +999,7 @@ impl PhysicsClient {
 
         let shape_index = self.add_visual_geometry(command, geometry, &mut scratch)?;
 
-        let options = options.into().unwrap_or_default();
+        let options = options.map_or(VisualShapeOptions::default(), Into::into);
         if let Some(flags) = options.flags {
             unsafe { ffi::b3CreateVisualSetFlag(command, shape_index, flags.bits()) };
         }

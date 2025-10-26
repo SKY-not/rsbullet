@@ -1,6 +1,8 @@
-use std::{marker::PhantomData, sync::mpsc, time::Duration};
+use std::{sync::mpsc, time::Duration};
 
-use robot_behavior::{AddRobot, AddSearchPath, PhysicsEngine, RobotFile};
+use robot_behavior::{
+    AddCollision, AddRobot, AddSearchPath, AddVisual, PhysicsEngine, Renderer, RobotFile,
+};
 use rsbullet_core::{BulletResult, Mode, PhysicsClient};
 
 use crate::{
@@ -99,37 +101,40 @@ impl AddSearchPath for RsBullet {
     }
 }
 
+impl Renderer for RsBullet {}
+
 impl AddRobot for RsBullet {
     type PR<R> = RsBulletRobot<R>;
     type RB<'a, R: RobotFile> = RsBulletRobotBuilder<'a, R>;
     fn robot_builder<R: RobotFile>(&mut self, _name: impl ToString) -> RsBulletRobotBuilder<'_, R> {
-        RsBulletRobotBuilder {
-            _marker: PhantomData,
-            rsbullet: self,
-            load_file: R::URDF,
-            base: None,
-            base_fixed: false,
-            scaling: None,
-            flags: None,
-            use_maximal_coordinates: None,
-        }
+        RsBulletRobotBuilder::new(self)
     }
 }
 
-// impl Renderer for RsBullet {
-//     fn set_additional_search_path(
-//         &mut self,
-//         path: impl AsRef<std::path::Path>,
-//     ) -> RendererResult<&mut Self> {
-//         self.client.set_additional_search_path(path)?;
-//         Ok(self)
-//     }
-// }
+impl AddCollision for RsBullet {
+    type EntityId = crate::CollisionId;
+    type CB<'a> = crate::EntityBuilder<'a, crate::CollisionMarker>;
+    fn collision<'a>(&'a mut self, collision: robot_behavior::Collision<'a>) -> Self::CB<'a> {
+        crate::EntityBuilder::collision(self, collision)
+    }
+}
+
+impl AddVisual for RsBullet {
+    type EntityId = crate::VisualId;
+    type VB<'a> = crate::EntityBuilder<'a, crate::VisualMarker>;
+    fn visual<'a>(&'a mut self, visual: robot_behavior::Visual<'a>) -> Self::VB<'a> {
+        crate::EntityBuilder::visual(self, visual)
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use nalgebra as na;
-    use robot_behavior::{AddRobot, RobotBuilder};
+    use robot_behavior::{
+        AddCollision, AddRobot, AddVisual, Entity, EntityBuilder, PhysicsEngine, RobotBuilder,
+    };
     use roplat_exrobot::ExRobot;
     use rsbullet_core::{LoadModelFlags, Mode};
 
@@ -168,5 +173,36 @@ mod tests {
             .unwrap();
 
         let _ = (&mut _robot1, &mut _robot2, &_robot3, engine);
+    }
+
+    #[test]
+    fn add_collision_and_visual() -> anyhow::Result<()> {
+        let mut engine = RsBullet::new(Mode::Gui)?;
+
+        engine
+            .set_gravity([0., 0., -9.8])?
+            .set_step_time(Duration::from_secs_f64(1. / 100.))?;
+
+        let shift = [0., -0.02, 0.];
+        let mesh_scale = [0.1, 0.1, 0.1];
+
+        let _visual_shape = engine
+            .visual(Entity::MeshFile {
+                file: "duck.obj",
+                scale: mesh_scale,
+            })
+            .base(shift)
+            .load()?;
+        let _collision_shape = engine
+            .collision(Entity::MeshFile {
+                file: "duck_vhacd.obj",
+                scale: mesh_scale,
+            })
+            .base(shift)
+            .load()?;
+
+        loop {
+            engine.step()?;
+        }
     }
 }

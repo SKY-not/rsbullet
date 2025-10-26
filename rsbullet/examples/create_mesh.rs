@@ -2,9 +2,9 @@ use std::{f64::consts::FRAC_2_PI, thread::sleep, time::Duration};
 
 use nalgebra as na;
 use rsbullet::{
-    BulletResult, CameraImageOptions, CollisionGeometry, CollisionId, ControlMode,
-    DebugVisualizerFlag, DebugVisualizerOptions, DynamicsUpdate, JointType, Mode, MultiBodyBase,
-    MultiBodyCreateOptions, MultiBodyLink, PhysicsClient, Renderer,
+    BulletResult, CameraImageOptions, CollisionGeometry, CollisionId, CollisionShapeOptions,
+    ControlMode, DebugVisualizerFlag, DebugVisualizerOptions, DynamicsUpdate, JointType, Mode,
+    MultiBodyBase, MultiBodyCreateOptions, MultiBodyLink, PhysicsClient, Renderer,
     ResetDebugVisualizerCameraOptions,
 };
 
@@ -42,21 +42,23 @@ fn main() -> BulletResult<()> {
             false,
         ))?;
 
-    let col_sphere =
-        client.create_collision_shape(&CollisionGeometry::Sphere { radius: 0.05 }, None)?;
+    let col_sphere = client.create_collision_shape(
+        &CollisionGeometry::Sphere { radius: 0.05 },
+        None::<CollisionShapeOptions>,
+    )?;
     let stone = client.create_collision_shape(
         &CollisionGeometry::Mesh {
             vertices: &VERTICES,
             indices: &INDICES,
             scale: [0.; 3],
         },
-        None,
+        None::<CollisionShapeOptions>,
     )?;
     let col_box = client.create_collision_shape(
         &CollisionGeometry::Box {
             half_extents: [0.5, 2.5, 00.1],
         },
-        None,
+        None::<CollisionShapeOptions>,
     )?;
 
     let mut segment_start = 0.;
