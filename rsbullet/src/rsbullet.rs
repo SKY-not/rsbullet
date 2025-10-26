@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::mpsc, time::Duration};
 
-use robot_behavior::{AddRobot, PhysicsEngine, PhysicsEngineResult, RobotFile};
+use robot_behavior::{AddRobot, AddSearchPath, PhysicsEngine, RobotFile};
 use rsbullet_core::{BulletResult, Mode, PhysicsClient};
 
 use crate::{
@@ -38,14 +38,13 @@ impl RsBullet {
         self.command_tx.clone()
     }
 
-    fn drain_queued_commands(&mut self) -> PhysicsEngineResult<()> {
+    fn drain_queued_commands(&mut self) {
         for control in self.command_rx.try_iter() {
             self.active_controls.push(control);
         }
-        Ok(())
     }
 
-    fn process_active_controls(&mut self) -> PhysicsEngineResult<()> {
+    fn process_active_controls(&mut self) -> BulletResult<()> {
         let mut index = 0;
         while index < self.active_controls.len() {
             if self.active_controls[index](&mut self.client, self.time_step)? {
@@ -59,14 +58,16 @@ impl RsBullet {
 }
 
 impl PhysicsEngine for RsBullet {
-    fn reset(&mut self) -> PhysicsEngineResult<()> {
+    type Error = rsbullet_core::BulletError;
+
+    fn reset(&mut self) -> BulletResult<()> {
         while self.command_rx.try_recv().is_ok() {}
         self.active_controls.clear();
         self.client.reset_simulation()?;
         Ok(())
     }
-    fn step(&mut self) -> PhysicsEngineResult<()> {
-        self.drain_queued_commands()?;
+    fn step(&mut self) -> BulletResult<()> {
+        self.drain_queued_commands();
         self.process_active_controls()?;
         self.client.step_simulation()?;
         Ok(())
@@ -75,19 +76,24 @@ impl PhysicsEngine for RsBullet {
         self.client.disconnect();
     }
 
-    fn set_step_time(&mut self, dt: Duration) -> PhysicsEngineResult<&mut Self> {
+    fn set_step_time(&mut self, dt: Duration) -> BulletResult<&mut Self> {
         self.client.set_time_step(dt)?;
         self.time_step = dt;
         Ok(self)
     }
-    fn set_gravity(&mut self, gravity: impl Into<[f64; 3]>) -> PhysicsEngineResult<&mut Self> {
+    fn set_gravity(&mut self, gravity: impl Into<[f64; 3]>) -> BulletResult<&mut Self> {
         self.client.set_gravity(gravity)?;
         Ok(self)
     }
-    fn set_additional_search_path(
+}
+
+impl AddSearchPath for RsBullet {
+    type Error = rsbullet_core::BulletError;
+
+    fn add_search_path(
         &mut self,
         path: impl AsRef<std::path::Path>,
-    ) -> PhysicsEngineResult<&mut Self> {
+    ) -> Result<&mut Self, Self::Error> {
         self.client.set_additional_search_path(path)?;
         Ok(self)
     }
@@ -96,13 +102,10 @@ impl PhysicsEngine for RsBullet {
 impl AddRobot for RsBullet {
     type PR<R> = RsBulletRobot<R>;
     type RB<'a, R: RobotFile> = RsBulletRobotBuilder<'a, R>;
-    fn robot_builder<'a, R: RobotFile>(
-        &'a mut self,
-        _name: impl ToString,
-    ) -> RsBulletRobotBuilder<'a, R> {
+    fn robot_builder<R: RobotFile>(&mut self, _name: impl ToString) -> RsBulletRobotBuilder<'_, R> {
         RsBulletRobotBuilder {
             _marker: PhantomData,
-            _rsbullet: self,
+            rsbullet: self,
             load_file: R::URDF,
             base: None,
             base_fixed: false,

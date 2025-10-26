@@ -82,7 +82,7 @@ impl GeometryScratch {
 /// | isConnected | **Implemented** | Uses `b3CanSubmitCommand` |
 impl PhysicsClient {
     /// Connect to an existing physics server (using shared memory by default).  
-    /// - connect(method, key=SHARED_MEMORY_KEY, options='')
+    /// - connect(method, `key=SHARED_MEMORY_KEY`, options='')
     /// - connect(method, hostname='localhost', port=1234, options='')  
     pub fn connect(mode: Mode) -> BulletResult<Self> {
         // Allow only a single GUI instance per process
@@ -297,7 +297,7 @@ impl PhysicsClient {
 /// | getPhysicsEngineParameters | **Implemented** | Query mirror of above |
 /// | setInternalSimFlags | **Implemented** | Expert-only flagging |
 impl PhysicsClient {
-    /// reset_simulation will remove all objects from the world and reset the world to initial conditions.
+    /// `reset_simulation` will remove all objects from the world and reset the world to initial conditions.
     pub fn reset_simulation(&mut self) -> BulletResult<()> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitResetSimulationCommand(self.handle) };
@@ -390,16 +390,16 @@ impl PhysicsClient {
     /// This way you can maintain control determinism of the simulation
     /// It is possible to run the simulation in real-time by letting the physics server
     /// automatically step the simulation according to its real-time-clock (RTC) using the
-    /// set_real_time_simulation command. If you enable the real-time simulation,
+    /// `set_real_time_simulation` command. If you enable the real-time simulation,
     /// you don't need to call [`step_simulation`](`Self::step_simulation()`).
     ///
-    /// Note that set_real_time_simulation has no effect in
+    /// Note that `set_real_time_simulation` has no effect in
     /// [`Direct mode`](`crate::mode::Mode::Direct`) :
     /// in [`Direct mode`](`crate::mode::Mode::Direct`) mode the physics
     /// server and client happen in the same thread and you trigger every command.
     /// In [`Gui mode`](`crate::mode::Mode::Gui`) and in Virtual Reality mode, and TCP/UDP mode,
-    /// the physics server runs in a separate thread from the client (RuBullet),
-    /// and set_real_time_simulation allows the physics server thread
+    /// the physics server runs in a separate thread from the client (`RuBullet`),
+    /// and `set_real_time_simulation` allows the physics server thread
     /// to add additional calls to  [`step_simulation`](`Self::step_simulation()`).
     ///
     /// # Arguments
@@ -417,7 +417,7 @@ impl PhysicsClient {
         Ok(self)
     }
 
-    /// Apply a batch of physics engine parameters, mirroring PyBullet's `setPhysicsEngineParameter`.
+    /// Apply a batch of physics engine parameters, mirroring `PyBullet`'s `setPhysicsEngineParameter`.
     pub fn set_physics_engine_parameter(
         &mut self,
         update: &PhysicsEngineParametersUpdate,
@@ -620,9 +620,9 @@ impl PhysicsClient {
     }
 
     /// Sends a command to the physics server to load a physics model from
-    /// a MuJoCo model.
+    /// a `MuJoCo` model.
     /// # Arguments
-    /// * `file` - a relative or absolute path to the MuJoCo file on the file system of the physics server.
+    /// * `file` - a relative or absolute path to the `MuJoCo` file on the file system of the physics server.
     /// * `flags` -  Flags for loading the model. Set to None if you do not whish to provide any.
     ///
     /// # Return
@@ -675,7 +675,7 @@ impl PhysicsClient {
 
     /// Loads Bodies from a `.bullet` file. These can be created with [`save_bullet`](`Self::save_bullet`).
     ///
-    /// Returns a list of BodyId's.
+    /// Returns a list of `BodyId`'s.
     /// # Arguments
     /// * `bullet_filename` - location of the `.bullet`
     /// # Example
@@ -753,7 +753,7 @@ impl PhysicsClient {
         )?;
         Ok(())
     }
-    /// Saves the current state in memory and returns a StateId which can be used by [`restore_state`](`Self::restore_state`)
+    /// Saves the current state in memory and returns a `StateId` which can be used by [`restore_state`](`Self::restore_state`)
     /// to restore this state.  Use [`save_bullet`](`Self::save_bullet`) if you want to save a state
     /// to a file.
     /// See `save_and_restore.rs` example.
@@ -859,25 +859,25 @@ impl PhysicsClient {
 /// | changeTexture | **Implemented** | Visual assets |
 impl PhysicsClient {
     /// You can create a collision shape in a similar way to creating a visual shape. If you have
-    /// both you can use them to create objects in RuBullet.
+    /// both you can use them to create objects in `RuBullet`.
     /// # Arguments
     /// * `shape` - A geometric body from which to create the shape
     /// * `frame_offset` - offset of the shape with respect to the link frame. Default is no offset.
     ///
     /// # Return
-    /// Returns a unique [CollisionId](crate::CollisionId) which can then be used to create a body.
+    /// Returns a unique [`CollisionId`](crate::CollisionId) which can then be used to create a body.
     /// # See also
-    /// * [create_visual_shape](`Self::create_visual_shape`)
-    /// * [create_multi_body](`Self::create_multi_body`)
+    /// * [`create_visual_shape`](`Self::create_visual_shape`)
+    /// * [`create_multi_body`](`Self::create_multi_body`)
     pub fn create_collision_shape(
         &mut self,
-        geometry: CollisionGeometry<'_>,
+        geometry: &CollisionGeometry<'_>,
         options: impl Into<Option<CollisionShapeOptions>>,
     ) -> BulletResult<i32> {
         self.ensure_can_submit()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
-        let shape_index = self.add_collision_geometry(command, &geometry, &mut scratch)?;
+        let shape_index = self.add_collision_geometry(command, geometry, &mut scratch)?;
 
         let CollisionShapeOptions { transform, flags } = options.into().unwrap_or_default();
 
@@ -972,7 +972,7 @@ impl PhysicsClient {
 
     /// You can create a visual shape in a similar way to creating a collision shape, with some
     /// additional arguments to control the visual appearance, such as diffuse and specular color.
-    /// When you use the [GeometricVisualShape::MeshFile](`crate::GeometricVisualShape::MeshFile`)
+    /// When you use the [`GeometricVisualShape::MeshFile`](`crate::GeometricVisualShape::MeshFile`)
     /// type, you can point to a Wavefront OBJ file, and the
     /// visual shape will parse some parameters from the material file (.mtl) and load a texture.
     /// Note that large textures (above 1024x1024 pixels)
@@ -980,23 +980,23 @@ impl PhysicsClient {
     ///
     /// # Arguments
     /// * `shape` - A geometric body from which to create the shape
-    /// * `options` - additional options to specify, like colors. See [VisualShapeOptions](crate::VisualShapeOptions)
+    /// * `options` - additional options to specify, like colors. See [`VisualShapeOptions`](crate::VisualShapeOptions)
     ///   for details.
     /// # Return
-    /// Returns a unique [VisualId](crate::VisualId) which can then be used to create a body.
+    /// Returns a unique [`VisualId`](crate::VisualId) which can then be used to create a body.
     /// # See also
-    /// * [create_collision_shape](`Self::create_collision_shape`)
-    /// * [create_multi_body](`Self::create_multi_body`)
+    /// * [`create_collision_shape`](`Self::create_collision_shape`)
+    /// * [`create_multi_body`](`Self::create_multi_body`)
     pub fn create_visual_shape(
         &mut self,
-        geometry: VisualGeometry<'_>,
+        geometry: &VisualGeometry<'_>,
         options: impl Into<Option<VisualShapeOptions>>,
     ) -> BulletResult<i32> {
         self.ensure_can_submit()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
 
-        let shape_index = self.add_visual_geometry(command, &geometry, &mut scratch)?;
+        let shape_index = self.add_visual_geometry(command, geometry, &mut scratch)?;
 
         let options = options.into().unwrap_or_default();
         if let Some(flags) = options.flags {
@@ -1012,15 +1012,15 @@ impl PhysicsClient {
             );
         }
         unsafe {
-            ffi::b3CreateVisualShapeSetRGBAColor(command, shape_index, options.rgba.as_ptr())
-        };
+            ffi::b3CreateVisualShapeSetRGBAColor(command, shape_index, options.rgba.as_ptr());
+        }
         unsafe {
             ffi::b3CreateVisualShapeSetSpecularColor(
                 command,
                 shape_index,
                 options.specular.as_ptr(),
-            )
-        };
+            );
+        }
 
         let status = self.submit_simple_command(
             command,
@@ -1070,15 +1070,15 @@ impl PhysicsClient {
                 );
             }
             unsafe {
-                ffi::b3CreateVisualShapeSetRGBAColor(command, shape_index, options.rgba.as_ptr())
-            };
+                ffi::b3CreateVisualShapeSetRGBAColor(command, shape_index, options.rgba.as_ptr());
+            }
             unsafe {
                 ffi::b3CreateVisualShapeSetSpecularColor(
                     command,
                     shape_index,
                     options.specular.as_ptr(),
-                )
-            };
+                );
+            }
         }
 
         let status = self.submit_simple_command(
@@ -1239,7 +1239,7 @@ impl PhysicsClient {
                 parent_link,
                 options.child_body,
                 child_link,
-                &mut joint_info,
+                &raw mut joint_info,
             )
         };
 
@@ -1336,7 +1336,7 @@ impl PhysicsClient {
             ffi::b3CreateSensorEnable6DofJointForceTorqueSensor(
                 command,
                 joint_index,
-                if enable { 1 } else { 0 },
+                enable.into(),
             );
         }
         self.submit_simple_command(
@@ -1657,10 +1657,10 @@ impl PhysicsClient {
                 self.handle,
                 body_unique_id,
                 user_data_index,
-                &mut key_ptr,
-                &mut user_data_id,
-                &mut link_index,
-                &mut visual_shape_index,
+                &raw mut key_ptr,
+                &raw mut user_data_id,
+                &raw mut link_index,
+                &raw mut visual_shape_index,
             );
         }
 
@@ -2309,7 +2309,7 @@ impl PhysicsClient {
             });
         }
 
-        let force = maximum_force.unwrap_or(100000.);
+        let force = maximum_force.unwrap_or(100_000.);
         let kp = 0.1;
         let kd = 1.0;
         let target_velocity = 0.;
@@ -2374,6 +2374,11 @@ impl PhysicsClient {
         control_mode: ControlModeArray<'_>,
         maximum_force: Option<&[f64]>,
     ) -> BulletResult<()> {
+        const DEFAULT_FORCE: f64 = 100_000.0;
+        const DEFAULT_KP: f64 = 0.1;
+        const DEFAULT_KD: f64 = 1.0;
+        const DEFAULT_TARGET_VELOCITY: f64 = 0.0;
+
         if joint_index.is_empty() {
             return Ok(());
         }
@@ -2381,11 +2386,6 @@ impl PhysicsClient {
         let command = unsafe {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
-
-        const DEFAULT_FORCE: f64 = 100000.0;
-        const DEFAULT_KP: f64 = 0.1;
-        const DEFAULT_KD: f64 = 1.0;
-        const DEFAULT_TARGET_VELOCITY: f64 = 0.0;
 
         let joint_count = joint_index.len();
 
@@ -2545,7 +2545,7 @@ impl PhysicsClient {
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
-        control: MultiDofControl<'_>,
+        control: &MultiDofControl<'_>,
     ) -> BulletResult<()> {
         self.ensure_can_submit()?;
         let info = self.get_joint_info(body_unique_id, joint_index)?;
@@ -2553,7 +2553,7 @@ impl PhysicsClient {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control.as_raw())
         };
 
-        self.configure_multi_dof_control(command, &info, &control)?;
+        Self::configure_multi_dof_control(command, &info, control)?;
 
         self.submit_simple_command(
             command,
@@ -2590,7 +2590,7 @@ impl PhysicsClient {
                 });
             }
             let info = self.get_joint_info(body_unique_id, entry.joint_index)?;
-            self.configure_multi_dof_control(command, &info, &entry.control)?;
+            Self::configure_multi_dof_control(command, &info, &entry.control)?;
         }
 
         self.submit_simple_command(
@@ -2696,8 +2696,8 @@ impl PhysicsClient {
         let success = unsafe {
             ffi::b3GetStatusInverseDynamicsJointForces(
                 status.handle,
-                &mut result_body,
-                &mut result_dof,
+                &raw mut result_body,
+                &raw mut result_dof,
                 joint_forces.as_mut_ptr(),
             )
         };
@@ -2752,7 +2752,7 @@ impl PhysicsClient {
         let success = unsafe {
             ffi::b3GetStatusJacobian(
                 status.handle,
-                &mut out_dof,
+                &raw mut out_dof,
                 linear.as_mut_ptr(),
                 angular.as_mut_ptr(),
             )
@@ -2814,7 +2814,12 @@ impl PhysicsClient {
         let mut out_dof = 0;
         let mut raw = vec![0.0_f64; dof * dof];
         let success = unsafe {
-            ffi::b3GetStatusMassMatrix(self.handle, status.handle, &mut out_dof, raw.as_mut_ptr())
+            ffi::b3GetStatusMassMatrix(
+                self.handle,
+                status.handle,
+                &raw mut out_dof,
+                raw.as_mut_ptr(),
+            )
         };
         if success == 0 {
             return Err(BulletError::CommandFailed {
@@ -2886,10 +2891,10 @@ impl PhysicsClient {
             }
         }
 
-        let has_nullspace = options.lower_limits.map(|s| s.len()).unwrap_or(0) == dof_usize
-            && options.upper_limits.map(|s| s.len()).unwrap_or(0) == dof_usize
-            && options.joint_ranges.map(|s| s.len()).unwrap_or(0) == dof_usize
-            && options.rest_poses.map(|s| s.len()).unwrap_or(0) == dof_usize;
+        let has_nullspace = options.lower_limits.map_or(0, <[f64]>::len) == dof_usize
+            && options.upper_limits.map_or(0, <[f64]>::len) == dof_usize
+            && options.joint_ranges.map_or(0, <[f64]>::len) == dof_usize
+            && options.rest_poses.map_or(0, <[f64]>::len) == dof_usize;
 
         unsafe {
             if has_nullspace {
@@ -2941,8 +2946,8 @@ impl PhysicsClient {
         let success = unsafe {
             ffi::b3GetStatusInverseKinematicsJointPositions(
                 status.handle,
-                &mut result_body,
-                &mut result_dof,
+                &raw mut result_body,
+                &raw mut result_dof,
                 results.as_mut_ptr(),
             )
         };
@@ -3035,10 +3040,10 @@ impl PhysicsClient {
             );
         }
 
-        let has_nullspace = options.lower_limits.map(|s| s.len()).unwrap_or(0) == dof_usize
-            && options.upper_limits.map(|s| s.len()).unwrap_or(0) == dof_usize
-            && options.joint_ranges.map(|s| s.len()).unwrap_or(0) == dof_usize
-            && options.rest_poses.map(|s| s.len()).unwrap_or(0) == dof_usize;
+        let has_nullspace = options.lower_limits.map_or(0, <[f64]>::len) == dof_usize
+            && options.upper_limits.map_or(0, <[f64]>::len) == dof_usize
+            && options.joint_ranges.map_or(0, <[f64]>::len) == dof_usize
+            && options.rest_poses.map_or(0, <[f64]>::len) == dof_usize;
 
         unsafe {
             if has_nullspace {
@@ -3082,8 +3087,8 @@ impl PhysicsClient {
         let success = unsafe {
             ffi::b3GetStatusInverseKinematicsJointPositions(
                 status.handle,
-                &mut result_body,
-                &mut result_dof,
+                &raw mut result_body,
+                &raw mut result_dof,
                 results.as_mut_ptr(),
             )
         };
@@ -3380,7 +3385,6 @@ impl PhysicsClient {
     }
 
     fn configure_multi_dof_control(
-        &mut self,
         command: ffi::b3SharedMemoryCommandHandle,
         info: &JointInfo,
         control: &MultiDofControl<'_>,
@@ -3407,8 +3411,9 @@ impl PhysicsClient {
                 max_velocity,
                 ..
             } => (*damping, *max_velocity),
-            MultiDofControl::Velocity { damping, .. } => (*damping, None),
-            MultiDofControl::Torque { damping, .. } => (*damping, None),
+            MultiDofControl::Velocity { damping, .. } | MultiDofControl::Torque { damping, .. } => {
+                (*damping, None)
+            }
         };
 
         if let Some(max_velocity) = max_velocity_opt {
@@ -3971,7 +3976,7 @@ impl PhysicsClient {
         )?;
 
         let mut raw = ffi::b3CameraImageData::default();
-        unsafe { ffi::b3GetCameraImageData(self.handle, &mut raw) };
+        unsafe { ffi::b3GetCameraImageData(self.handle, &raw mut raw) };
         Self::decode_camera_image(&raw)
     }
 
@@ -4196,7 +4201,7 @@ impl PhysicsClient {
         )?;
 
         let mut value = 0.0_f64;
-        let success = unsafe { ffi::b3GetStatusDebugParameterValue(status.handle, &mut value) };
+        let success = unsafe { ffi::b3GetStatusDebugParameterValue(status.handle, &raw mut value) };
         if success == 0 {
             return Err(BulletError::CommandFailed {
                 message: "Unable to read user debug parameter",
@@ -4252,7 +4257,8 @@ impl PhysicsClient {
         let status = self.submit_command(command)?;
 
         let mut camera = ffi::b3OpenGLVisualizerCameraInfo::default();
-        let success = unsafe { ffi::b3GetStatusOpenGLVisualizerCamera(status.handle, &mut camera) };
+        let success =
+            unsafe { ffi::b3GetStatusOpenGLVisualizerCamera(status.handle, &raw mut camera) };
         if success == 0 {
             return Err(BulletError::CommandFailed {
                 message: "Unable to fetch debug visualizer camera",
@@ -4358,7 +4364,7 @@ impl PhysicsClient {
             ffi::EnumSharedMemoryServerStatus::CMD_VISUAL_SHAPE_INFO_COMPLETED,
         )?;
         let mut info = ffi::b3VisualShapeInformation::default();
-        unsafe { ffi::b3GetVisualShapeInformation(self.handle, &mut info) };
+        unsafe { ffi::b3GetVisualShapeInformation(self.handle, &raw mut info) };
         Ok(Self::collect_visual_shapes(&info))
     }
 
@@ -4377,7 +4383,7 @@ impl PhysicsClient {
             ffi::EnumSharedMemoryServerStatus::CMD_COLLISION_SHAPE_INFO_COMPLETED,
         )?;
         let mut info = ffi::b3CollisionShapeInformation::default();
-        unsafe { ffi::b3GetCollisionShapeInformation(self.handle, &mut info) };
+        unsafe { ffi::b3GetCollisionShapeInformation(self.handle, &raw mut info) };
         Ok(Self::collect_collision_shapes(&info))
     }
 }
@@ -4440,7 +4446,7 @@ impl PhysicsClient {
         )?;
 
         let mut raw = ffi::b3VREventsData::default();
-        unsafe { ffi::b3GetVREventsData(self.handle, &mut raw) };
+        unsafe { ffi::b3GetVREventsData(self.handle, &raw mut raw) };
         Ok(Self::collect_vr_events(
             &raw,
             options.include_aux_analog_axes,
@@ -4483,7 +4489,7 @@ impl PhysicsClient {
         )?;
 
         let mut raw = ffi::b3KeyboardEventsData::default();
-        unsafe { ffi::b3GetKeyboardEventsData(self.handle, &mut raw) };
+        unsafe { ffi::b3GetKeyboardEventsData(self.handle, &raw mut raw) };
         Ok(Self::collect_keyboard_events(&raw))
     }
 
@@ -4496,7 +4502,7 @@ impl PhysicsClient {
         )?;
 
         let mut raw = ffi::b3MouseEventsData::default();
-        unsafe { ffi::b3GetMouseEventsData(self.handle, &mut raw) };
+        unsafe { ffi::b3GetMouseEventsData(self.handle, &raw mut raw) };
         Ok(Self::collect_mouse_events(&raw))
     }
 
@@ -4632,7 +4638,7 @@ impl PhysicsClient {
             m_data1: ptr::null(),
         };
         let has_data =
-            unsafe { ffi::b3GetStatusPluginCommandReturnData(self.handle, &mut raw) } != 0;
+            unsafe { ffi::b3GetStatusPluginCommandReturnData(self.handle, &raw mut raw) } != 0;
         let return_data = if has_data && raw.m_length > 0 && !raw.m_data1.is_null() {
             let len = raw.m_length as usize;
             let bytes = unsafe { slice::from_raw_parts(raw.m_data1, len) };
@@ -4661,7 +4667,7 @@ impl PhysicsClient {
             )
         };
         unsafe {
-            ffi::b3SetProfileTimingType(command, if name_c.is_some() { 0 } else { 1 });
+            ffi::b3SetProfileTimingType(command, name_c.is_some().into());
         }
         self.submit_simple_command(
             command,
@@ -4728,13 +4734,10 @@ impl PhysicsClient {
                 ffi::b3PhysicsParamSetTimeStep(command, fixed_time_step.as_secs_f64());
             }
             if let Some(use_split_impulse) = update.use_split_impulse {
-                match use_split_impulse {
-                    true => {
-                        ffi::b3PhysicsParamSetUseSplitImpulse(command, 1);
-                    }
-                    false => {
-                        ffi::b3PhysicsParamSetUseSplitImpulse(command, 0);
-                    }
+                if use_split_impulse {
+                    ffi::b3PhysicsParamSetUseSplitImpulse(command, 1);
+                } else {
+                    ffi::b3PhysicsParamSetUseSplitImpulse(command, 0);
                 }
             }
             if let Some(split_impulse_penetration_threshold) =
@@ -4766,13 +4769,10 @@ impl PhysicsClient {
                 );
             }
             if let Some(enable_file_caching) = update.enable_file_caching {
-                match enable_file_caching {
-                    true => {
-                        ffi::b3PhysicsParamSetEnableFileCaching(command, 1);
-                    }
-                    false => {
-                        ffi::b3PhysicsParamSetEnableFileCaching(command, 0);
-                    }
+                if enable_file_caching {
+                    ffi::b3PhysicsParamSetEnableFileCaching(command, 1);
+                } else {
+                    ffi::b3PhysicsParamSetEnableFileCaching(command, 0);
                 }
             }
             if let Some(erp) = update.erp {
@@ -4788,23 +4788,17 @@ impl PhysicsClient {
                 ffi::b3PhysicsParamSetDefaultFrictionERP(command, friction_erp);
             }
             if let Some(enable_cone_friction) = update.enable_cone_friction {
-                match enable_cone_friction {
-                    true => {
-                        ffi::b3PhysicsParamSetEnableConeFriction(command, 1);
-                    }
-                    false => {
-                        ffi::b3PhysicsParamSetEnableConeFriction(command, 0);
-                    }
+                if enable_cone_friction {
+                    ffi::b3PhysicsParamSetEnableConeFriction(command, 1);
+                } else {
+                    ffi::b3PhysicsParamSetEnableConeFriction(command, 0);
                 }
             }
             if let Some(deterministic_overlapping_pairs) = update.deterministic_overlapping_pairs {
-                match deterministic_overlapping_pairs {
-                    true => {
-                        ffi::b3PhysicsParameterSetDeterministicOverlappingPairs(command, 1);
-                    }
-                    false => {
-                        ffi::b3PhysicsParameterSetDeterministicOverlappingPairs(command, 0);
-                    }
+                if deterministic_overlapping_pairs {
+                    ffi::b3PhysicsParameterSetDeterministicOverlappingPairs(command, 1);
+                } else {
+                    ffi::b3PhysicsParameterSetDeterministicOverlappingPairs(command, 0);
                 }
             }
             if let Some(allowed_ccd_penetration) = update.allowed_ccd_penetration {
@@ -4815,18 +4809,15 @@ impl PhysicsClient {
                 ffi::b3PhysicsParameterSetJointFeedbackMode(command, joint_feedback_mode as i32);
             }
             if let Some(enable_sat) = update.enable_sat {
-                match enable_sat {
-                    true => {
-                        ffi::b3PhysicsParameterSetEnableSAT(command, 1);
-                    }
-                    false => {
-                        ffi::b3PhysicsParameterSetEnableSAT(command, 0);
-                    }
+                if enable_sat {
+                    ffi::b3PhysicsParameterSetEnableSAT(command, 1);
+                } else {
+                    ffi::b3PhysicsParameterSetEnableSAT(command, 0);
                 }
             }
             if let Some(constraint_solver_type) = update.constraint_solver_type {
                 let val = constraint_solver_type as i32;
-                println!("{:?}", val);
+                println!("{val:?}");
                 ffi::b3PhysicsParameterSetConstraintSolverType(command, val);
             }
             if let Some(global_cfm) = update.global_cfm {
@@ -4834,13 +4825,10 @@ impl PhysicsClient {
                 ffi::b3PhysicsParamSetDefaultGlobalCFM(command, global_cfm);
             }
             if let Some(report_solver_analytics) = update.report_solver_analytics {
-                match report_solver_analytics {
-                    true => {
-                        ffi::b3PhysicsParamSetSolverAnalytics(command, 1);
-                    }
-                    false => {
-                        ffi::b3PhysicsParamSetSolverAnalytics(command, 0);
-                    }
+                if report_solver_analytics {
+                    ffi::b3PhysicsParamSetSolverAnalytics(command, 1);
+                } else {
+                    ffi::b3PhysicsParamSetSolverAnalytics(command, 0);
                 }
             }
             if let Some(warm_starting_factor) = update.warm_starting_factor {
@@ -5244,8 +5232,8 @@ impl PhysicsClient {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3RequestActualStateCommandInit(self.handle, body_unique_id) };
         unsafe {
-            let velocity_flag = if compute_link_velocity { 1 } else { 0 };
-            let kinematics_flag = if compute_forward_kinematics { 1 } else { 0 };
+            let velocity_flag = compute_link_velocity.into();
+            let kinematics_flag = compute_forward_kinematics.into();
             ffi::b3RequestActualStateCommandComputeLinkVelocity(command, velocity_flag);
             ffi::b3RequestActualStateCommandComputeForwardKinematics(command, kinematics_flag);
         }
@@ -5350,8 +5338,8 @@ impl PhysicsClient {
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null_mut(),
-                &mut actual_state_q,
-                &mut actual_state_qdot,
+                &raw mut actual_state_q,
+                &raw mut actual_state_qdot,
                 ptr::null_mut(),
             )
         };

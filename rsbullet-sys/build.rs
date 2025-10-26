@@ -5,8 +5,8 @@ use std::{
 
 fn lib_exists(dir: &Path, name: &str) -> bool {
     // Windows static: Foo.lib；Unix static: libFoo.a
-    let win = dir.join(format!("{}.lib", name));
-    let unix = dir.join(format!("lib{}.a", name));
+    let win = dir.join(format!("{name}.lib"));
+    let unix = dir.join(format!("lib{name}.a"));
     win.exists() || unix.exists()
 }
 
@@ -35,7 +35,12 @@ fn main() {
     let libdir = candidates
         .into_iter()
         .find(|dir| lib_exists(dir, "LinearMath"))
-        .unwrap_or_else(|| panic!("failed to locate built Bullet libraries under {:?}", dst));
+        .unwrap_or_else(|| {
+            panic!(
+                "failed to locate built Bullet libraries under {}",
+                dst.display()
+            )
+        });
 
     println!("cargo:rustc-link-search=native={}", libdir.display());
 
@@ -62,7 +67,7 @@ fn main() {
         "cbullet",
     ] {
         if lib_exists(&libdir, lib) {
-            println!("cargo:rustc-link-lib=static={}", lib);
+            println!("cargo:rustc-link-lib=static={lib}");
         }
     }
 

@@ -2,7 +2,7 @@ use std::ffi::NulError;
 use std::fmt::{Display, Formatter};
 use std::io;
 
-use robot_behavior::{PhysicsEngineException, RendererException, RobotException};
+use robot_behavior::RobotException;
 
 /// Represents failures that can occur while interacting with the Bullet physics server.
 #[derive(Debug)]
@@ -29,8 +29,9 @@ pub enum BulletError {
 impl Display for BulletError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            BulletError::NullPointer(msg) => write!(f, "{msg}"),
-            BulletError::ServerUnavailable(msg) => write!(f, "{msg}"),
+            BulletError::NullPointer(msg)
+            | BulletError::ServerUnavailable(msg)
+            | BulletError::UnknownType(msg) => write!(f, "{msg}"),
             BulletError::UnexpectedStatus { expected, actual } => write!(
                 f,
                 "Unexpected Bullet status. expected={expected} actual={actual}"
@@ -38,7 +39,6 @@ impl Display for BulletError {
             BulletError::CommandFailed { message, code } => {
                 write!(f, "{message} (code={code})")
             }
-            BulletError::UnknownType(msg) => write!(f, "{msg}"),
             BulletError::CString(err) => err.fmt(f),
         }
     }
@@ -59,88 +59,6 @@ impl From<io::Error> for BulletError {
         BulletError::CommandFailed {
             message: "IO Error occurred",
             code: e.raw_os_error().unwrap_or(-1),
-        }
-    }
-}
-
-impl From<BulletError> for PhysicsEngineException {
-    fn from(e: BulletError) -> Self {
-        match e {
-            BulletError::NullPointer(msg) => PhysicsEngineException::ServerUnavailable(msg),
-            BulletError::ServerUnavailable(msg) => PhysicsEngineException::ServerUnavailable(msg),
-            BulletError::UnexpectedStatus { expected, actual } => {
-                PhysicsEngineException::CommandFailed(Box::leak(
-                    format!("Unexpected status with: expected={expected}, actual={actual}")
-                        .into_boxed_str(),
-                ))
-            }
-            BulletError::CommandFailed { message, code } => PhysicsEngineException::CommandFailed(
-                Box::leak(format!("{message} (code={code})").into_boxed_str()),
-            ),
-            BulletError::UnknownType(msg) => PhysicsEngineException::UnknownType(msg),
-            BulletError::CString(_) => PhysicsEngineException::NoException,
-        }
-    }
-}
-
-impl From<PhysicsEngineException> for BulletError {
-    fn from(e: PhysicsEngineException) -> Self {
-        match e {
-            PhysicsEngineException::ServerUnavailable(msg) => BulletError::ServerUnavailable(msg),
-            PhysicsEngineException::CommandFailed(msg) => BulletError::CommandFailed {
-                message: msg,
-                code: -1,
-            },
-            PhysicsEngineException::UnknownType(msg) => BulletError::UnknownType(msg),
-            PhysicsEngineException::NoException => BulletError::CommandFailed {
-                message: "No exception",
-                code: -1,
-            },
-            PhysicsEngineException::Other(e) => BulletError::CommandFailed {
-                message: Box::leak(e.into_boxed_str()),
-                code: -1,
-            },
-        }
-    }
-}
-
-impl From<BulletError> for RendererException {
-    fn from(e: BulletError) -> Self {
-        match e {
-            BulletError::NullPointer(msg) => RendererException::ServerUnavailable(msg),
-            BulletError::ServerUnavailable(msg) => RendererException::ServerUnavailable(msg),
-            BulletError::UnexpectedStatus { expected, actual } => {
-                RendererException::CommandFailed(Box::leak(
-                    format!("Unexpected status with: expected={expected}, actual={actual}")
-                        .into_boxed_str(),
-                ))
-            }
-            BulletError::CommandFailed { message, code } => RendererException::CommandFailed(
-                Box::leak(format!("{message} (code={code})").into_boxed_str()),
-            ),
-            BulletError::UnknownType(msg) => RendererException::UnknownType(msg),
-            BulletError::CString(_) => RendererException::NoException,
-        }
-    }
-}
-
-impl From<RendererException> for BulletError {
-    fn from(e: RendererException) -> Self {
-        match e {
-            RendererException::ServerUnavailable(msg) => BulletError::ServerUnavailable(msg),
-            RendererException::CommandFailed(msg) => BulletError::CommandFailed {
-                message: msg,
-                code: -1,
-            },
-            RendererException::UnknownType(msg) => BulletError::UnknownType(msg),
-            RendererException::NoException => BulletError::CommandFailed {
-                message: "No exception",
-                code: -1,
-            },
-            RendererException::Other(e) => BulletError::CommandFailed {
-                message: Box::leak(e.into_boxed_str()),
-                code: -1,
-            },
         }
     }
 }

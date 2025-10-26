@@ -45,8 +45,8 @@ pub struct PhysicsEngineParametersUpdate {
     /// time will progress this amount. Same as [`set_time_step`](`crate::PhysicsClient::set_time_step`)
     pub fixed_time_step: Option<Duration>,
     ///Choose the maximum number of constraint solver iterations.
-    /// If the solver_residual_threshold is reached,
-    /// the solver may terminate before the num_solver_iterations.
+    /// If the `solver_residual_threshold` is reached,
+    /// the solver may terminate before the `num_solver_iterations`.
     pub num_solver_iterations: Option<usize>,
     /// Advanced feature, only when using maximal coordinates: split the positional
     /// constraint solving and velocity constraint solving in two stages,
@@ -271,7 +271,7 @@ pub struct UrdfOptions {
 }
 
 impl From<()> for UrdfOptions {
-    fn from(_: ()) -> Self {
+    fn from((): ()) -> Self {
         Self::default()
     }
 }
@@ -1095,7 +1095,7 @@ pub enum ControlModeArray<'a> {
     },
 }
 
-impl<'a> ControlModeArray<'a> {
+impl ControlModeArray<'_> {
     pub fn as_raw(self) -> i32 {
         match self {
             ControlModeArray::Velocity(_) => 0,
@@ -1107,7 +1107,7 @@ impl<'a> ControlModeArray<'a> {
     }
 }
 
-/// Multi-DoF 单关节控制参数，使用枚举携带模式与数据（对齐 set_joint_motor_control 的风格）。
+/// Multi-DoF 单关节控制参数，使用枚举携带模式与数据（对齐 `set_joint_motor_control` 的风格）。
 #[derive(Debug, Clone)]
 pub enum MultiDofControl<'a> {
     /// 位置/PD/Stable-PD 类控制，提供位置与速度目标、增益、力等。
@@ -1155,7 +1155,7 @@ pub enum MultiDofControl<'a> {
     },
 }
 
-impl<'a> MultiDofControl<'a> {
+impl MultiDofControl<'_> {
     /// 与底层 Bullet 控制码保持一致，用于初始化命令。
     pub fn as_raw(&self) -> i32 {
         match self {
@@ -1470,7 +1470,7 @@ pub struct DebugPointsOptions<'a> {
     pub replace_item_unique_id: Option<i32>,
 }
 
-impl<'a> Default for DebugPointsOptions<'a> {
+impl Default for DebugPointsOptions<'_> {
     fn default() -> Self {
         static EMPTY: [[f64; 3]; 0] = [];
         Self {
@@ -1498,7 +1498,7 @@ pub struct DebugTextOptions<'a> {
     pub replace_item_unique_id: Option<i32>,
 }
 
-impl<'a> Default for DebugTextOptions<'a> {
+impl Default for DebugTextOptions<'_> {
     fn default() -> Self {
         Self {
             text: "",
@@ -1522,7 +1522,7 @@ pub struct DebugParameterOptions<'a> {
     pub start_value: f64,
 }
 
-impl<'a> Default for DebugParameterOptions<'a> {
+impl Default for DebugParameterOptions<'_> {
     fn default() -> Self {
         Self {
             name: "",
@@ -1787,7 +1787,7 @@ pub enum LoggingType {
     VideoMp4,
     Commands,
     ContactPoints,
-    /// This will dump a timings file in JSON format that can be opened using Google Chrome about://tracing LOAD.
+    /// This will dump a timings file in JSON format that can be opened using Google Chrome <about://tracing> LOAD.
     ProfileTimings,
     AllCommands,
     ReplayAllCommands,
@@ -1815,7 +1815,7 @@ pub struct StateLoggingOptions {
 }
 
 impl From<()> for StateLoggingOptions {
-    fn from(_: ()) -> Self {
+    fn from((): ()) -> Self {
         Self::default()
     }
 }

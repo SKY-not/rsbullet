@@ -4,7 +4,7 @@ use std::ffi::c_void;
 use std::os::raw::{c_char, c_int, c_uchar};
 use std::ptr::NonNull;
 pub const SHARED_MEMORY_KEY: i32 = 12347;
-pub const SHARED_MEMORY_MAGIC_NUMBER: i32 = 202010061;
+pub const SHARED_MEMORY_MAGIC_NUMBER: i32 = 202_010_061;
 pub const MAX_VR_ANALOG_AXIS: usize = 5;
 pub const MAX_VR_BUTTONS: usize = 64;
 pub const MAX_VR_CONTROLLERS: usize = 8;
@@ -497,7 +497,7 @@ unsafe extern "C" {
     #[doc = "return the total number of bodies in the simulation"]
     pub fn b3GetNumBodies(physClient: b3PhysicsClientHandle) -> c_int;
 
-    #[doc = " return the body unique id, given the index in range [0 , b3GetNumBodies() )"]
+    #[doc = " return the body unique id, given the index in range [0 , `b3GetNumBodies()` )"]
     pub fn b3GetBodyUniqueId(physClient: b3PhysicsClientHandle, serialIndex: c_int) -> c_int;
 
     #[doc = "given a body unique id, return the body information. See b3BodyInfo in SharedMemoryPublic.h"]
@@ -2037,7 +2037,7 @@ unsafe extern "C" {
         constraintUniqueId: c_int,
         info: *mut b3UserConstraint,
     ) -> c_int;
-    #[doc = " return the user constraint id, given the index in range [0 , b3GetNumUserConstraints() )"]
+    #[doc = " return the user constraint id, given the index in range [0 , `b3GetNumUserConstraints()` )"]
     pub fn b3GetUserConstraintId(physClient: b3PhysicsClientHandle, serialIndex: c_int) -> c_int;
 }
 
@@ -2059,8 +2059,8 @@ pub enum eURDF_Flags {
     URDF_PARSE_SENSORS = 16384,
     URDF_USE_MATERIAL_COLORS_FROM_MTL = 32768,
     URDF_USE_MATERIAL_TRANSPARANCY_FROM_MTL = 65536,
-    URDF_MAINTAIN_LINK_ORDER = 131072,
-    URDF_ENABLE_WAKEUP = 262144,
+    URDF_MAINTAIN_LINK_ORDER = 131_072,
+    URDF_ENABLE_WAKEUP = 262_144,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2270,9 +2270,9 @@ pub struct b3LinkState {
     pub m_local_inertial_orientation: [f64; 4],
     pub m_world_link_frame_position: [f64; 3],
     pub m_world_link_frame_orientation: [f64; 4],
-    ///only valid when ACTUAL_STATE_COMPUTE_LINKVELOCITY is set (b3RequestActualStateCommandComputeLinkVelocity)
+    ///only valid when `ACTUAL_STATE_COMPUTE_LINKVELOCITY` is set (b3RequestActualStateCommandComputeLinkVelocity)
     pub m_world_linear_velocity: [f64; 3],
-    ///only valid when ACTUAL_STATE_COMPUTE_LINKVELOCITY is set (b3RequestActualStateCommandComputeLinkVelocity)
+    ///only valid when `ACTUAL_STATE_COMPUTE_LINKVELOCITY` is set (b3RequestActualStateCommandComputeLinkVelocity)
     pub m_world_angular_velocity: [f64; 3],
 
     pub m_world_aabb_min: [f64; 3],
@@ -2403,14 +2403,14 @@ pub struct b3MouseEvent {
 }
 
 pub const B3_MAX_NUM_INDICES: usize = if cfg!(target_os = "macos") {
-    32768
+    32_768
 } else {
-    524288
+    524_288
 };
 pub const B3_MAX_NUM_VERTICES: usize = if cfg!(target_os = "macos") {
     8192
 } else {
-    131072
+    131_072
 };
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

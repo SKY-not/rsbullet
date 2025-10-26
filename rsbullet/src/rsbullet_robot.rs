@@ -39,7 +39,7 @@ impl<R> RsBulletRobot<R> {
 
 pub struct RsBulletRobotBuilder<'a, R> {
     pub(crate) _marker: PhantomData<R>,
-    pub(crate) _rsbullet: &'a mut RsBullet,
+    pub(crate) rsbullet: &'a mut RsBullet,
     pub(crate) load_file: &'static str,
     pub(crate) base: Option<nalgebra::Isometry3<f64>>,
     pub(crate) base_fixed: bool,
@@ -49,10 +49,10 @@ pub struct RsBulletRobotBuilder<'a, R> {
 }
 
 impl<'a, R: RobotFile> RsBulletRobotBuilder<'a, R> {
-    pub fn new(_rsbullet: &'a mut RsBullet) -> Self {
+    pub fn new(rsbullet: &'a mut RsBullet) -> Self {
         RsBulletRobotBuilder {
             _marker: PhantomData,
-            _rsbullet,
+            rsbullet,
             load_file: R::URDF,
             base: None,
             base_fixed: false,
@@ -94,7 +94,7 @@ impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R
         self
     }
     fn load(self) -> Result<RsBulletRobot<R>> {
-        let body_id = self._rsbullet.client_mut().load_urdf(
+        let body_id = self.rsbullet.client_mut().load_urdf(
             self.load_file,
             Some(UrdfOptions {
                 base: self.base,
@@ -105,7 +105,7 @@ impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R
             }),
         )?;
 
-        let joint_count = self._rsbullet.client_mut().get_num_joints(body_id);
+        let joint_count = self.rsbullet.client_mut().get_num_joints(body_id);
         let joint_indices: Vec<i32> = (0..joint_count).collect();
         let end_effector_link = if joint_count == 0 {
             -1
@@ -114,11 +114,11 @@ impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R
         };
 
         let joint_states = self
-            ._rsbullet
+            .rsbullet
             .client_mut()
             .get_joint_states(body_id, &joint_indices)?;
         let link_state = if end_effector_link >= 0 {
-            Some(self._rsbullet.client_mut().get_link_state(
+            Some(self.rsbullet.client_mut().get_link_state(
                 body_id,
                 end_effector_link,
                 true,
@@ -136,7 +136,7 @@ impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R
         let joint_indices_clone = joint_indices.clone();
         let end_effector_link_clone = end_effector_link;
 
-        let sender = self._rsbullet.command_sender();
+        let sender = self.rsbullet.command_sender();
 
         let robot = RsBulletRobot::<R> {
             body_id,

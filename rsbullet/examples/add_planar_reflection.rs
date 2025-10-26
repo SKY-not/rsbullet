@@ -48,7 +48,7 @@ fn main() -> BulletResult<()> {
     let mesh_scale = [0.1, 0.1, 0.1];
 
     let visual_shape = client.create_visual_shape(
-        VisualGeometry::Mesh {
+        &VisualGeometry::Mesh {
             file: "duck.obj",
             scale: mesh_scale,
         },
@@ -60,7 +60,7 @@ fn main() -> BulletResult<()> {
         },
     )?;
     let collision_shape = client.create_collision_shape(
-        CollisionGeometry::MeshFile {
+        &CollisionGeometry::MeshFile {
             file: "duck_vhacd.obj",
             scale: mesh_scale,
         },

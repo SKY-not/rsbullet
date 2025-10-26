@@ -43,9 +43,9 @@ fn main() -> BulletResult<()> {
         ))?;
 
     let col_sphere =
-        client.create_collision_shape(CollisionGeometry::Sphere { radius: 0.05 }, None)?;
+        client.create_collision_shape(&CollisionGeometry::Sphere { radius: 0.05 }, None)?;
     let stone = client.create_collision_shape(
-        CollisionGeometry::Mesh {
+        &CollisionGeometry::Mesh {
             vertices: &VERTICES,
             indices: &INDICES,
             scale: [0.; 3],
@@ -53,7 +53,7 @@ fn main() -> BulletResult<()> {
         None,
     )?;
     let col_box = client.create_collision_shape(
-        CollisionGeometry::Box {
+        &CollisionGeometry::Box {
             half_extents: [0.5, 2.5, 00.1],
         },
         None,
@@ -177,7 +177,6 @@ fn main() -> BulletResult<()> {
                 None,
             )?;
         }
-        segment_start -= 1.;
     }
 
     loop {
