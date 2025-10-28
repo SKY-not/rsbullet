@@ -46,7 +46,7 @@ impl<'a> EntityBuilder<'a, VisualMarker> {
 }
 
 impl<'a> robot_behavior::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarker> {
-    type EntityId = CollisionId;
+    type Entity = CollisionId;
     fn name(mut self, _name: String) -> Self {
         self.name = Some(_name);
         self
@@ -63,7 +63,7 @@ impl<'a> robot_behavior::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarker
         self.scaling = Some(scaling);
         self
     }
-    fn load(self) -> anyhow::Result<Self::EntityId> {
+    fn load(self) -> anyhow::Result<Self::Entity> {
         let id = self
             .rsbullet
             .client
@@ -87,7 +87,7 @@ impl<'a> robot_behavior::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarker
 }
 
 impl<'a> robot_behavior::EntityBuilder<'a> for EntityBuilder<'a, VisualMarker> {
-    type EntityId = VisualId;
+    type Entity = VisualId;
     fn name(mut self, _name: String) -> Self {
         self.name = Some(_name);
         self
@@ -104,7 +104,7 @@ impl<'a> robot_behavior::EntityBuilder<'a> for EntityBuilder<'a, VisualMarker> {
         self.scaling = Some(scaling);
         self
     }
-    fn load(self) -> anyhow::Result<Self::EntityId> {
+    fn load(self) -> anyhow::Result<Self::Entity> {
         let id = self
             .rsbullet
             .client

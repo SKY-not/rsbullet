@@ -132,9 +132,7 @@ mod tests {
     use std::time::Duration;
 
     use nalgebra as na;
-    use robot_behavior::{
-        AddCollision, AddRobot, AddVisual, Entity, EntityBuilder, PhysicsEngine, RobotBuilder,
-    };
+    use robot_behavior::{AddCollision, AddRobot, AddVisual, Entity, EntityBuilder, PhysicsEngine};
     use roplat_exrobot::ExRobot;
     use rsbullet_core::{LoadModelFlags, Mode};
 

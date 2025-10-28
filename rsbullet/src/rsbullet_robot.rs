@@ -6,7 +6,7 @@ use anyhow::Result;
 use robot_behavior::behavior::{Arm, ArmParam, ArmPreplannedMotionImpl};
 use robot_behavior::utils::{isometry_to_raw_parts, path_generate};
 use robot_behavior::{
-    ArmState, Coord, LoadState, Pose, RobotBuilder, RobotException, RobotFile, RobotResult,
+    ArmState, Coord, EntityBuilder, LoadState, Pose, RobotException, RobotFile, RobotResult,
 };
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, LoadModelFlags,
@@ -74,13 +74,13 @@ impl<R> RsBulletRobotBuilder<'_, R> {
     }
 }
 
-impl<'a, R> RobotBuilder<'a, R, RsBulletRobot<R>> for RsBulletRobotBuilder<'a, R> {
+impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
+    type Entity = RsBulletRobot<R>;
+
     fn name(self, _: String) -> Self {
         self
     }
-    fn mesh_path(self, _: &'static str) -> Self {
-        self
-    }
+
     fn base(mut self, base: impl Into<nalgebra::Isometry3<f64>>) -> Self {
         self.base = Some(base.into());
         self
